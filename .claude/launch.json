@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "threat-intel-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:\\Users\\PC\\Documents\\threat-intel-agent\\app\\server.py"],
+      "port": 8765
+    }
+  ]
+}

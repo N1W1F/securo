@@ -1,0 +1,6 @@
+{
+  "llm_enabled": true,
+  "llm_model": "llama3.2",
+  "schedule_enabled": false,
+  "schedule_interval_days": 7
+}

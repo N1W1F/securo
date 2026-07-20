@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Threat Intel &amp; Asset Monitor</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app-shell">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <img class="brand-logo" src="/icon.png" alt="">
+      <div class="brand-text">
+        <strong>Threat Intel</strong>
+        <span>Asset Monitor</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav" role="tablist">
+      <button class="tab-btn is-active" data-tab="updates" role="tab" aria-selected="true">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M12 3v6l4 2M21 12a9 9 0 1 1-9-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="tabUpdates">التحديثات</span>
+      </button>
+      <button class="tab-btn" data-tab="security" role="tab" aria-selected="false">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span data-i18n="tabSecurity">الأمان</span>
+      </button>
+      <button class="tab-btn" data-tab="history" role="tab" aria-selected="false">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="tabHistory">التاريخ</span>
+      </button>
+      <button class="tab-btn" data-tab="ai" role="tab" aria-selected="false">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/></svg>
+        <span data-i18n="tabAI">الذكاء الاصطناعي</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button class="lang-opt" data-lang="ar" aria-pressed="true">عربي</button>
+        <button class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main-col">
+
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Threat Intel &amp; Asset Monitor</h1>
+        <p data-i18n="subtitle">يفحص برامجك المثبّتة ويطابقها مع قاعدة ثغرات NVD الرسمية.</p>
+      </div>
+      <button id="runBtn" class="btn-primary">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4l14 8-14 8V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span class="btn-label" data-i18n="runScan">تشغيل الفحص</span>
+        <span class="spinner" hidden></span>
+      </button>
+    </header>
+
+    <div id="runStatus" class="run-status" role="status" aria-live="polite">
+      <span class="status-dot"></span><span id="runStatusText">جاهز للفحص</span>
+      <span id="runStatusMeta"></span>
+    </div>
+
+    <section class="kpi-row" id="kpiRow">
+      <div class="kpi-card kpi-gauge" data-kpi="health" role="button" tabindex="0" aria-expanded="false">
+        <div class="gauge-wrap">
+          <svg viewBox="0 0 120 120" width="84" height="84">
+            <circle cx="60" cy="60" r="50" class="gauge-track"></circle>
+            <circle id="healthRing" cx="60" cy="60" r="50" class="gauge-fill" transform="rotate(-90 60 60)"></circle>
+          </svg>
+          <div class="gauge-center">
+            <span id="healthScoreNum">—</span>
+          </div>
+        </div>
+        <div class="kpi-label" data-i18n="kpiHealth">مؤشر الصحة الأمنية</div>
+        <span class="kpi-info-dot" aria-hidden="true">؟</span>
+      </div>
+      <div class="kpi-card" data-kpi="findings" role="button" tabindex="0" aria-expanded="false">
+        <div class="kpi-num" id="kpiFindings">—</div>
+        <div class="kpi-label" data-i18n="kpiFindings">إجمالي النتائج</div>
+        <span class="kpi-info-dot" aria-hidden="true">؟</span>
+      </div>
+      <div class="kpi-card kpi-danger" data-kpi="critical" role="button" tabindex="0" aria-expanded="false">
+        <div class="kpi-num" id="kpiCritical">—</div>
+        <div class="kpi-label" data-i18n="kpiCritical">حرجة/عالية</div>
+        <span class="kpi-info-dot" aria-hidden="true">؟</span>
+      </div>
+      <div class="kpi-card" data-kpi="assets" role="button" tabindex="0" aria-expanded="false">
+        <div class="kpi-num" id="kpiAssets">—</div>
+        <div class="kpi-label" data-i18n="kpiAssets">أصول مفحوصة</div>
+        <span class="kpi-info-dot" aria-hidden="true">؟</span>
+      </div>
+    </section>
+    <div id="kpiDetail" class="kpi-detail" hidden></div>
+
+    <div id="urgentBanner" class="urgent-banner" hidden></div>
+
+    <div class="scan-context">
+    <section class="pipeline">
+      <div class="stage" data-stage="orchestrator">
+        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M15 9l-3.5 6-2.5-3.5L15 9z" fill="currentColor"/></svg></div>
+        <div class="stage-name" data-i18n="stageOrchestrator">Orchestrator</div>
+        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
+      </div>
+      <div class="stage-arrow">←</div>
+      <div class="stage" data-stage="hunter">
+        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+        <div class="stage-name" data-i18n="stageThreatHunter">Threat Hunter</div>
+        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
+      </div>
+      <div class="stage-arrow">←</div>
+      <div class="stage" data-stage="auditor">
+        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 13l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="stage-name" data-i18n="stageAssetAuditor">Asset Auditor</div>
+        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
+      </div>
+      <div class="stage-arrow">←</div>
+      <div class="stage" data-stage="remediation">
+        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v5h5M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+        <div class="stage-name" data-i18n="stageRemediation">Remediation</div>
+        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
+      </div>
+    </section>
+
+    <div class="section-toggle-row"><button class="section-toggle" data-target="scanGrid" aria-expanded="true"><span class="section-toggle-label">إخفاء التقرير</span><svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+    <main class="grid" id="scanGrid">
+      <div class="panel report-panel">
+        <div class="panel-head">
+          <h2 data-i18n="reportTitle">التقرير النهائي</h2>
+          <div class="report-head-right">
+            <div class="view-switch" role="group">
+              <button class="view-opt is-active" data-view="full" data-i18n="viewFull">التقرير الكامل</button>
+              <button class="view-opt" data-view="summary" data-i18n="viewSummary">ملخص</button>
+            </div>
+            <span id="reportMeta" class="badge-muted" data-i18n="metaNone">لا يوجد بعد</span>
+          </div>
+        </div>
+        <p class="review-note report-note" data-i18n="reviewNoteText">"تحتاج مراجعة" = ثغرة قديمة (+10 سنوات) أو بلا درجة خطورة مؤكدة من NVD — تحقق يدوياً قبل الاعتماد عليها.</p>
+        <div id="reportBox" class="report-box" dir="auto">
+          <p class="empty-hint" data-i18n="reportEmpty">شغّل الفحص لعرض النتائج هنا.</p>
+        </div>
+        <div id="summaryBox" class="report-box summary-box" dir="auto" hidden></div>
+      </div>
+    </main>
+    </div>
+
+    <section class="panel tabpanel" data-tabpanel="updates">
+      <div class="panel-head">
+        <h2 data-i18n="updatesTitle">تحديثات البرامج (عبر winget)</h2>
+        <div class="updates-actions">
+          <button id="scanBtn" class="btn-secondary"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="scanUpdates">فحص التحديثات المتاحة</span></button>
+          <button id="applyAllBtn" class="btn-danger" hidden><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="updateAll">تحديث الكل</span></button>
+        </div>
+      </div>
+      <div id="updProgress" class="upd-progress" hidden></div>
+      <div id="updatesBox" class="updates-box">
+        <p class="empty-hint" data-i18n="updatesEmpty">اضغط "فحص التحديثات المتاحة" لعرض البرامج القابلة للتحديث عبر winget.</p>
+      </div>
+      <pre id="updatesLog" class="log-box updates-log" dir="ltr" hidden></pre>
+    </section>
+
+    <section class="panel tabpanel" data-tabpanel="security" hidden>
+      <div class="panel-head">
+        <h2 data-i18n="secTitle">اختبارات الأمان — Golden Dataset</h2>
+        <button id="secRunBtn" class="btn-secondary">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4l14 8-14 8V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span class="sec-btn-label" data-i18n="secRun">تشغيل الاختبارات</span>
+          <span class="spinner sec-spinner" hidden></span>
+        </button>
+      </div>
+      <div id="secSummary" class="sec-summary" hidden></div>
+      <div class="security-view-switch" role="group" data-i18n-aria="secViewGroupLabel">
+        <button class="view-opt is-active" data-sec-view="summary" data-i18n="secViewSummary">ملخص فقط</button>
+        <button class="view-opt" data-sec-view="full" data-i18n="secViewFull">القائمة الكاملة</button>
+      </div>
+      <div id="secChips" class="sec-chips" hidden></div>
+          <div id="secBody" class="sec-body" hidden>
+        <aside id="secSide" class="sec-side"></aside>
+        <div id="secTableWrap" class="sec-table-wrap"></div>
+      </div>
+      <div id="secEmpty" class="updates-box">
+        <p class="empty-hint" data-i18n="secEmpty">شغّل مجموعة الاختبارات للتأكد من صمود حمايات النظام ضد الهجمات.</p>
+      </div>
+    </section>
+
+    <section class="panel tabpanel" data-tabpanel="history" hidden>
+      <div class="panel-head">
+        <h2 data-i18n="histTitle">تاريخ المخاطر</h2>
+        <span id="histCount" class="badge-muted">—</span>
+      </div>
+      <div id="histBox" class="hist-box">
+        <p class="empty-hint" data-i18n="histEmpty">لا يوجد تاريخ بعد.</p>
+      </div>
+      <div id="histDetail" class="hist-detail" hidden></div>
+      <div id="diffBox" class="diff-box"></div>
+    </section>
+
+    <section class="panel tabpanel" data-tabpanel="ai" hidden>
+      <div class="panel-head"><h2 data-i18n="aiTitle">المحلّل الذكي والأتمتة</h2></div>
+      <div class="ai-body">
+        <div class="ai-ask">
+          <textarea id="askInput" class="ai-input" rows="2" data-i18n-ph="askPlaceholder"></textarea>
+          <div class="ai-ask-actions">
+            <button id="askBtn" class="btn-secondary"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5h16v11H8l-4 4V5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span data-i18n="askBtn">اسأل</span></button>
+            <button id="reassessBtn" class="btn-secondary"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M19 15l.7 1.9L21.5 17.6l-1.8.7L19 20.2l-.7-1.9-1.8-.7 1.8-.7L19 15z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg><span data-i18n="reassessBtn">إعادة تقييم النتائج</span></button>
+          </div>
+        </div>
+        <div id="aiOut" class="ai-out" dir="auto"></div>
+
+        <div class="set-block">
+          <h3 data-i18n="setTitle">الإعدادات والفحص الدوري</h3>
+
+          <label class="set-row set-check">
+            <input type="checkbox" id="schedChk">
+            <span data-i18n="schedToggle">تفعيل الفحص التلقائي (إشعار سطح مكتب فوري)</span>
+          </label>
+          <label class="set-row">
+            <span data-i18n="intervalLabel">فترة الفحص التلقائي</span>
+            <select id="intervalSel" class="set-select"></select>
+          </label>
+          <label class="set-row set-check">
+            <input type="checkbox" id="startupChk">
+            <span data-i18n="startupToggle">فتح التطبيق تلقائياً عند تسجيل الدخول لويندوز</span>
+          </label>
+          <div id="nextRunLine" class="set-next"></div>
+          <div class="set-actions">
+            <button id="saveCfgBtn" class="btn-secondary"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h11l3 3v13H5V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 20v-6h8v6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span data-i18n="saveBtn">حفظ</span></button>
+            <button id="notifyTestBtn" class="btn-secondary"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9a6 6 0 1 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 13 6 9z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.5 17a2.5 2.5 0 0 0 5 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span data-i18n="notifyTestBtn">إرسال إشعار اختبار</span></button>
+            <button id="runNowBtn" class="btn-danger"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="runNowBtn">فحص الآن</span></button>
+          </div>
+          <div id="setMsg" class="set-msg"></div>
+
+          <div class="set-heading-row">
+            <h3 data-i18n="nvdKeyTitle">مفتاح NVD (اختياري — لتسريع الفحص)</h3>
+            <button id="nvdHelpBtn" class="help-btn" type="button" aria-expanded="false" data-i18n-aria="helpBtnAria">؟</button>
+          </div>
+          <div id="nvdHelpBox" class="help-box" hidden>
+            <ol data-i18n-html="nvdHelpSteps"></ol>
+            <a href="https://nvd.nist.gov/developers/request-an-api-key" target="_blank" rel="noopener" class="help-link" data-i18n="nvdHelpLink">افتح صفحة طلب المفتاح ↗</a>
+          </div>
+          <p class="review-note" data-i18n="nvdKeyHint">مفتاح مجاني من nvd.nist.gov يرفع سرعة الفحص حتى 10 أضعاف. اتركه فارغاً للعمل بالوضع العادي.</p>
+          <div id="nvdKeyStatus" class="set-status"></div>
+          <div class="set-actions">
+            <input id="nvdApiKey" class="nvd-key-input" type="password" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
+            <button id="saveNvdKeyBtn" class="btn-secondary"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h11l3 3v13H5V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 20v-6h8v6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span data-i18n="saveBtn">حفظ</span></button>
+          </div>
+
+          <div class="set-heading-row">
+            <h3 data-i18n="ollamaTitle">الذكاء الاصطناعي المحلي (Ollama) — اختياري</h3>
+            <button id="ollamaHelpBtn" class="help-btn" type="button" aria-expanded="false" data-i18n-aria="helpBtnAria">؟</button>
+          </div>
+          <div id="ollamaHelpBox" class="help-box" hidden>
+            <ol data-i18n-html="ollamaHelpSteps"></ol>
+            <a href="https://ollama.com/download" target="_blank" rel="noopener" class="help-link" data-i18n="ollamaHelpLink">تحميل Ollama لويندوز ↗</a>
+          </div>
+          <p class="review-note" data-i18n="ollamaHint">يلزم فقط لميزات اشرح/اسأل/إعادة التقييم. يعمل محلياً بلا إنترنت بعد التثبيت — يتصل تلقائياً بمجرد تشغيله، بلا أي إعداد إضافي هنا.</p>
+          <div id="ollamaStatus" class="set-status"></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <aside class="activity-rail">
+    <div class="panel-head">
+      <h2 data-i18n="logTitle">سجل التنفيذ المباشر</h2>
+      <span id="logCount" class="badge-muted">0</span>
+    </div>
+    <pre id="logBox" class="log-box" dir="ltr" data-i18n="logWaiting">بانتظار بدء التشغيل…</pre>
+  </aside>
+
+</div>
+<script src="/i18n.js"></script>
+<script src="/icons.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

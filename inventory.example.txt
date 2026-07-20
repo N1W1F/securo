@@ -1,0 +1,14 @@
+# Asset inventory — one program per line, "Name Version".
+# Replace these with your own software. On Windows you can generate a real
+# list with:   winget list
+#
+# Lines starting with # are ignored.
+
+Node.js 24.16.0
+Python 3.12.10
+Git 2.54.0
+Docker Desktop 4.75.0
+Google Chrome 150.0.7871.101
+Mozilla Firefox 152.0.4
+VLC media player 3.0.23
+WinRAR 7.22

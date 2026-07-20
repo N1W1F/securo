@@ -1,0 +1,67 @@
+name: CI
+
+# Runs on every push and every pull request against main — this is the gate:
+# code with failing tests never merges, and main always stays in a state the
+# .exe can be safely built from.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Golden Dataset security test suite
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No install step: the app + test suite are stdlib-only (see
+      # requirements.txt) except pywebview, which is only needed for the
+      # desktop window and irrelevant to running the tests.
+      - name: Run Golden Dataset (126 security tests)
+        run: python app/tests/golden_dataset.py
+
+      - name: Import-check every module (catches version-specific NameErrors)
+        run: |
+          python -c "import sys; sys.path.insert(0, 'app'); import server, appconfig, history, notify, security, scheduler, secure_secrets, encrypt_secrets"
+          python -c "import sys; sys.path.insert(0, 'app'); sys.path.insert(0, 'app/agents'); import asset_auditor, threat_hunter, remediation, package_manager, analyst, kev_checker, decision, snooze"
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-golden-dataset-report
+          path: |
+            SECURITY_GOLDEN_DATASET.md
+            SECURITY_GOLDEN_DATASET.json
+
+  build:
+    name: Build ThreatIntelAgent.exe
+    needs: test
+    runs-on: windows-latest
+    # Only build the shippable artifact once tests already passed, and only
+    # for real pushes to main — PRs get validated but don't produce a build.
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build + runtime dependencies
+        run: pip install pyinstaller pywebview pillow
+
+      - name: Build exe
+        run: python build_exe.py
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThreatIntelAgent-exe
+          path: ThreatIntelAgent.exe

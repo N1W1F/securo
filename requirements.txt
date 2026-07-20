@@ -1,0 +1,11 @@
+# Runtime dependency (desktop window):
+pywebview>=5.0
+
+# Optional — only needed to regenerate the app icon (app/make_icon.py):
+# Pillow>=10.0
+
+# Optional — only needed to build ThreatIntelAgent.exe (build_exe.py):
+# pyinstaller>=6.0
+
+# Everything else uses the Python standard library (http.server, urllib,
+# subprocess, json). No third-party network/security libraries are pulled in.

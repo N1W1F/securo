@@ -1,0 +1,36 @@
+# secrets & local config — never commit
+secrets.local.json
+config.local.json
+app/secrets.local.json
+app/config.local.json
+
+# private runtime data
+inventory.txt
+threat_intel_report.md
+threat_intel_findings.json
+history.jsonl
+audit.log
+app/audit.log
+app/crash.log
+app/out.log
+app/.instance.lock
+snoozes.json
+scheduler_state.json
+SECURITY_GOLDEN_DATASET.json
+SECURITY_GOLDEN_DATASET.md
+inventory_snapshot.json
+nvd_cache.json
+app/inventory_snapshot.json
+app/nvd_cache.json
+ignored_updates.json
+
+# python
+__pycache__/
+*.pyc
+
+# build output
+share/
+build/
+dist/
+ThreatIntelAgent.exe
+.instance.lock
