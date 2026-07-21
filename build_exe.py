@@ -1,4 +1,4 @@
-"""Build ThreatIntelAgent.exe — a real Windows executable with the app icon
+"""Build Securo.exe — a real Windows executable with the app icon
 embedded as a resource, instead of running via pythonw.exe (which shows
 Python's own icon in the taskbar, not ours).
 
@@ -6,7 +6,7 @@ Must run with the SAME Python environment that has pywebview installed
 (the one launch.vbs points at), or the bundle will be missing it.
 
 Run:  python build_exe.py
-Output: dist/ThreatIntelAgent.exe (then copy next to this file to run it —
+Output: dist/Securo.exe (then copy next to this file to run it —
 persistent data lives beside the exe, see security.py's FROZEN branch).
 """
 import shutil
@@ -21,7 +21,7 @@ APP_DIR = BASE_DIR / "app"
 def main() -> int:
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--name", "ThreatIntelAgent",
+        "--name", "Securo",
         "--onefile",
         "--windowed",
         "--icon", str(APP_DIR / "app.ico"),
@@ -37,8 +37,8 @@ def main() -> int:
     if result.returncode != 0:
         return result.returncode
 
-    built = BASE_DIR / "dist" / "ThreatIntelAgent.exe"
-    target = BASE_DIR / "ThreatIntelAgent.exe"
+    built = BASE_DIR / "dist" / "Securo.exe"
+    target = BASE_DIR / "Securo.exe"
     shutil.copy2(built, target)
     print(f"\nBuilt: {built}")
     print(f"Copied to: {target}  (run it from here — persistent data lands next to it)")

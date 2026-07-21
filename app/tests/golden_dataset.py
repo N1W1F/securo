@@ -921,7 +921,7 @@ def ignore_rejects_invalid_id():
 #     string CreateToastNotifier silently accepts and then drops
 # ============================================================
 @test("Notification Identity", "سكربت الإشعار يستخدم AUMID مسجّل بدل اسم عشوائي",
-      "لا يستخدم النص الحرفي 'Threat Intel Agent' كهوية مباشرة",
+      "لا يستخدم النص الحرفي 'Securo' كهوية مباشرة",
       "notify.AUMID + تسجيل ريجستري HKCU\\...\\AppUserModelId", "Baseline / Data Quality")
 def notify_uses_registered_aumid():
     has_aumid_var = "CreateToastNotifier($aumid)" in notify._TOAST_SCRIPT

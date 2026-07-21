@@ -83,7 +83,7 @@ def run_cycle_now(scan_fn, decision_provider=None) -> dict:
         toast_sent = False
         if urgent_count:
             toast_sent = notify.send(
-                "Threat Intel — تنبيه أمني عاجل",
+                "Securo — تنبيه أمني عاجل",
                 f"{urgent_count} عنصر يحتاج قرارك الآن. مؤشر الصحة: {health_score if health_score is not None else '—'}",
             )
 

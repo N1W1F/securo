@@ -47,7 +47,7 @@ jobs:
             SECURITY_GOLDEN_DATASET.json
 
   build:
-    name: Build ThreatIntelAgent.exe
+    name: Build Securo.exe
     needs: test
     runs-on: windows-latest
     # Only build the shippable artifact once tests already passed, and only
@@ -69,5 +69,5 @@ jobs:
       - name: Upload exe artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ThreatIntelAgent-exe
-          path: ThreatIntelAgent.exe
+          name: Securo-exe
+          path: Securo.exe

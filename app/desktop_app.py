@@ -73,7 +73,7 @@ def main() -> None:
     t.start()
 
     webview.create_window(
-        "Threat Intel & Asset Monitor",
+        "Securo",
         f"http://{BIND_HOST}:{BIND_PORT}",
         width=1180,
         height=780,
