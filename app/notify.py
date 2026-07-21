@@ -5,7 +5,7 @@ elsewhere in this codebase (fixed argv, no shell=True). All user-controlled
 text (title/message) is XML-escaped before it reaches the script.
 
 CreateToastNotifier() needs an AUMID (app identity) that Windows actually
-recognizes — an arbitrary string like "Threat Intel Agent" is accepted
+recognizes — an arbitrary string like "Securo" is accepted
 without error but the toast is then silently dropped (no popup, nothing in
 Action Center either), which is exactly the "nothing happens" bug this
 file used to have. The fix Microsoft documents for unpackaged apps is a
@@ -26,13 +26,13 @@ AGENT = "Notifier"
 TIMEOUT_SECS = 15
 MAX_TITLE_CHARS = 120
 MAX_MESSAGE_CHARS = 300
-AUMID = "ThreatIntelAgent.DesktopApp"
+AUMID = "Securo.DesktopApp"
 
 _TOAST_SCRIPT = r'''
 $aumid = "__AUMID__"
 $regPath = "HKCU:\Software\Classes\AppUserModelId\$aumid"
 if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "Threat Intel Agent"
+Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "Securo"
 Set-ItemProperty -Path $regPath -Name "IconUri" -Value "__ICON__"
 Set-ItemProperty -Path $regPath -Name "IconBackgroundColor" -Value "0xFF0A0612"
 

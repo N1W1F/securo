@@ -32,7 +32,7 @@ __pycache__/
 share/
 build/
 dist/
-ThreatIntelAgent.exe
+Securo.exe
 .instance.lock
 submission/pptx-build/
 SUBMISSION.md

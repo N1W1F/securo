@@ -1,4 +1,4 @@
-# Threat Intel & Asset Monitor
+# Securo
 
 A local, multi-agent security dashboard. It reads a list of your installed
 software, checks each item against the public **NVD** CVE database, writes a
