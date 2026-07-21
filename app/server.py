@@ -549,7 +549,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "enabled": startup_shortcut.is_enabled()})
 
         elif self.path == "/api/notify/test":
-            ok = notify.send("Threat Intel Agent", "هذا إشعار اختبار — الإشعارات تعمل بنجاح.")
+            ok = notify.send("Securo", "هذا إشعار اختبار — الإشعارات تعمل بنجاح.")
             self._json({"ok": ok})
 
         elif self.path == "/api/nvd/key":

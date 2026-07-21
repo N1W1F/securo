@@ -13,7 +13,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent
 OUT_DIR = BASE / "share"
 VERSION = "1.0"
-ZIP_PATH = OUT_DIR / f"ThreatIntelAgent-v{VERSION}-source.zip"
+ZIP_PATH = OUT_DIR / f"Securo-v{VERSION}-source.zip"
 
 INCLUDE_TOP = ["README.md", "SHARING.md", "SUBMISSION.md", "requirements.txt",
                "inventory.example.txt", "SECURITY_GOLDEN_DATASET.md", "SECURITY_GOLDEN_DATASET.json"]

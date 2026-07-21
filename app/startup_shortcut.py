@@ -19,8 +19,8 @@ LAUNCH_VBS = APP_DIR / "launch.vbs"
 # Prefer the packaged .exe (proper taskbar/window icon, no console-flash
 # risk) when it exists; fall back to the pythonw+vbs launcher for dev
 # checkouts that haven't built one.
-EXE_PATH = BASE_DIR / "ThreatIntelAgent.exe"
-SHORTCUT_NAME = "Threat Intel Agent.lnk"
+EXE_PATH = BASE_DIR / "Securo.exe"
+SHORTCUT_NAME = "Securo.lnk"
 
 
 def _startup_dir() -> Path | None:
