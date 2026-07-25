@@ -29,7 +29,7 @@ from security import (  # noqa: E402
     SecurityError, assert_within_sandbox, read_only_open, write_report_atomic,
     write_findings_atomic, sanitize_software_name, BASE_DIR, REPORT_PATH, MAX_INVENTORY_BYTES,
 )
-from agents import package_manager, threat_hunter, asset_auditor  # noqa: E402
+from agents import package_manager, threat_hunter, asset_auditor, winget_table  # noqa: E402
 from agents import analyst  # noqa: E402
 from agents import kev_checker, decision as decision_agent  # noqa: E402
 from agents import remediation  # noqa: E402
@@ -587,9 +587,14 @@ def inv_keeps_real_app():
       "الاسم المُرجَع ينتهي برقم الإصدار",
       "asset_auditor._load_winget_assets version suffix", "Baseline / Data Freshness")
 def inv_includes_installed_version():
-    header = "Name".ljust(17) + "Id".ljust(26) + "Version".ljust(8) + "Source"
+    # Column padding here mirrors real winget output, which pads every
+    # header generously. The previous fixture used "Version".ljust(8),
+    # leaving a SINGLE space before "Source" — a spacing winget never
+    # actually emits for headers, and which no column-boundary heuristic
+    # can distinguish from a space inside a value.
+    header = "Name".ljust(20) + "Id".ljust(28) + "Version".ljust(12) + "Source"
     sep = "-" * len(header)
-    row = "Telegram Desktop".ljust(17) + "Telegram.TelegramDesktop".ljust(26) + "5.2.1".ljust(8) + "winget"
+    row = "Telegram Desktop".ljust(20) + "Telegram.TelegramDesktop".ljust(28) + "5.2.1".ljust(12) + "winget"
     fake_stdout = f"{header}\n{sep}\n{row}\n"
     orig_run = asset_auditor.subprocess.run
 
@@ -602,6 +607,48 @@ def inv_includes_installed_version():
     finally:
         asset_auditor.subprocess.run = orig_run
     return (len(assets) == 1 and assets[0] == "Telegram Desktop 5.2.1"), str(assets)
+
+
+# ============================================================
+# 21b. LOCALE INDEPENDENCE — winget localizes its table headers to the
+#      Windows display language. Matching on the English words made the
+#      parser return [] on Arabic/German/etc, which the app then reported
+#      as "no software installed" / "no updates available": a clean bill of
+#      health for a scan that examined nothing. This app's UI is Arabic
+#      first, so that was the expected deployment, not an edge case.
+# ============================================================
+_ARABIC_WINGET = (
+    "الاسم".ljust(26) + "المعرف".ljust(30) + "الإصدار".ljust(16) + "متوفر".ljust(16) + "المصدر" + "\n"
+    + "-" * 100 + "\n"
+    + "Google Chrome".ljust(26) + "Google.Chrome.EXE".ljust(30) + "141.0.1".ljust(16) + "142.0.2".ljust(16) + "winget" + "\n"
+)
+
+@test("Locale Independence", "جدول winget بترويسة عربية يُقرأ بشكل صحيح",
+      "يُستخرج صف واحد بحقول صحيحة رغم أن الترويسة ليست إنجليزية",
+      "winget_table.parse (بنية الجدول بدل نص الترويسة)", "Baseline / Silent False Negative")
+def winget_parses_localized_header():
+    rows = winget_table.parse(_ARABIC_WINGET)
+    ok = (len(rows) == 1
+          and rows[0].get("Id") == "Google.Chrome.EXE"
+          and rows[0].get("Version") == "141.0.1"
+          and rows[0].get("Available") == "142.0.2"
+          and rows[0].get("Source") == "winget")
+    return ok, str(rows)
+
+@test("Locale Independence", "التحديث المتاح يُكتشف رغم الترويسة العربية",
+      "scan_upgradable يرجع الحزمة القابلة للتحديث",
+      "package_manager يعتمد winget_table المشترك", "Baseline / Silent False Negative")
+def upgrades_found_on_localized_header():
+    rows = package_manager._parse_table(_ARABIC_WINGET)
+    upgradable = [r for r in rows if r.get("Available") and r["Available"] not in ("", "Unknown")]
+    return len(upgradable) == 1 and upgradable[0]["Id"] == "Google.Chrome.EXE", str(upgradable)
+
+@test("Locale Independence", "مخرجات winget غير القابلة للقراءة لا تُعتبر جهازاً نظيفاً",
+      "looks_like_table ترجع False فيُسجَّل كخطأ لا كنتيجة سليمة",
+      "asset_auditor يكتب error بدل قائمة فارغة", "A05 / Silent Failure")
+def unreadable_winget_output_is_an_error():
+    garbage = "winget : The term 'winget' is not recognized.\nAt line:1 char:1\n"
+    return winget_table.looks_like_table(garbage) is False, repr(garbage[:40])
 
 
 # ============================================================
@@ -995,22 +1042,23 @@ def frozen_base_dir_is_next_to_exe():
       "المحاولة الثانية ترجع False دون تشغيل ثريد ثانٍ",
       "server._try_start_orchestrator atomic claim", "State & Concurrency")
 def scan_start_is_single_winner():
-    orig_running = srv._state["running"]
+    # Inject a recording spawner rather than patching threading.Thread:
+    # server.threading IS the stdlib module, so patching it there is
+    # process-global, and ThreadingHTTPServer creates a Thread per incoming
+    # connection — this test used to silently break the live server for its
+    # own duration when run via the /api/security/run route.
     started = []
-    orig_thread = srv.threading.Thread
-
-    class _FakeThread:
-        def __init__(self, *a, **k): pass
-        def start(self): started.append(1)
-
-    srv.threading.Thread = _FakeThread
-    srv._state["running"] = False
+    with srv._state_lock:
+        orig_running = srv._state["running"]
+        if orig_running:
+            # A real scan is in flight; don't touch shared state under it.
+            return True, "skipped: scan in progress"
     try:
-        first = srv._try_start_orchestrator()   # should win, "start" one thread
-        second = srv._try_start_orchestrator()  # should lose (running now True)
+        first = srv._try_start_orchestrator(spawn=lambda target: started.append(target))
+        second = srv._try_start_orchestrator(spawn=lambda target: started.append(target))
     finally:
-        srv.threading.Thread = orig_thread
-        srv._state["running"] = orig_running
+        with srv._state_lock:
+            srv._state["running"] = orig_running
     return first is True and second is False and len(started) == 1, f"first={first} second={second} threads={len(started)}"
 
 

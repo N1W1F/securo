@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from audit import log
+from agents import winget_table
 
 AGENT = "Package Manager"
 
@@ -54,52 +55,62 @@ def _human_size(n: int) -> str:
 
 
 def _parse_table(raw: str) -> list[dict]:
-    lines = [l for l in raw.splitlines() if l.strip()]
-    header_idx = next((i for i, l in enumerate(lines) if l.startswith("Name")), None)
-    if header_idx is None:
-        return []
+    # Delegates to the shared locale-independent parser. Matching on the
+    # English header words returned [] on any non-English Windows, which
+    # surfaced as "no updates available" on a machine full of outdated
+    # software.
+    return winget_table.parse(raw)
 
-    header = lines[header_idx]
-    cols = ["Name", "Id", "Version", "Available", "Source"]
-    starts = {}
-    for col in cols:
-        pos = header.find(col)
-        if pos == -1:
-            return []
-        starts[col] = pos
-    ordered = sorted(starts.items(), key=lambda kv: kv[1])
 
-    rows = []
-    for line in lines[header_idx + 2:]:  # skip header + the "----" separator
-        if not line.strip() or set(line.strip()) == {"-"}:
-            continue
-        fields = {}
-        for i, (col, start) in enumerate(ordered):
-            end = ordered[i + 1][1] if i + 1 < len(ordered) else len(line)
-            fields[col] = line[start:end].strip()
-        rows.append(fields)
-    return rows
+# Package sources winget can actually upgrade for us. Previously this was
+# hardcoded to just "winget", which silently dropped any Microsoft Store
+# package that had an update available — the row was parsed correctly and
+# then thrown away, so the update simply never appeared in the UI.
+UPGRADABLE_SOURCES = {"winget", "msstore"}
+
+_last_coverage = {"total": 0, "tracked": 0, "untracked": 0}
+
+
+def coverage() -> dict:
+    """How much of the installed software winget can even check for updates.
+
+    Packages with no Source (installed outside any winget catalog, or apps
+    that self-update like browsers) are invisible to update detection — on
+    a typical machine that's the MAJORITY of installed software. Surfacing
+    this stops "N updates available" from being read as "N is everything
+    that's out of date", which it is not."""
+    return dict(_last_coverage)
 
 
 def scan_upgradable() -> list[dict]:
     global _last_scanned_ids
     log(AGENT, "scanning installed packages via winget list")
     try:
+        # Plain `winget list` (no --include-unknown: that flag is only legal
+        # alongside --upgrade-available, and passing it here makes winget
+        # refuse the command outright and emit no table at all).
         result = _run([WINGET, "list", "--accept-source-agreements"], SCAN_TIMEOUT_SECS)
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         log(AGENT, f"winget scan failed: {e}")
         return []
 
     rows = _parse_table(result.stdout)
+    tracked = [r for r in rows if r.get("Source") in UPGRADABLE_SOURCES]
+    _last_coverage.update({
+        "total": len(rows),
+        "tracked": len(tracked),
+        "untracked": len(rows) - len(tracked),
+    })
+
     upgradable = [
-        r for r in rows
-        if r.get("Source") == "winget"
-        and r.get("Available")
+        r for r in tracked
+        if r.get("Available")
         and r.get("Available") not in ("", "Unknown")
         and PACKAGE_ID_RE.match(r.get("Id", ""))
     ]
     _last_scanned_ids = {r["Id"] for r in upgradable}
-    log(AGENT, f"found {len(upgradable)} package(s) with an available update")
+    log(AGENT, f"found {len(upgradable)} package(s) with an available update "
+               f"({len(tracked)} of {len(rows)} installed packages are update-trackable)")
     return upgradable
 
 
