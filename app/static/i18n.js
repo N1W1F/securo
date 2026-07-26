@@ -10,7 +10,14 @@ const I18N = {
     subtitle: "يفحص البرامج المثبّتة على جهازك، يطابقها مع قاعدة الثغرات الرسمية (NVD)، ويكشف التحديثات المتاحة عبر winget — كل ذلك محلياً وبدون أي تكلفة.",
     runScan: "تشغيل الفحص",
     running: "جاري التنفيذ…",
+    deepScan: "فحص عميق",
+    deepScanRunning: "فحص عميق جارٍ…",
+    deepScanHint: "يتجاهل النتائج المخزّنة ويستعلم NVD من جديد عن كل برنامج — أدق لكن أبطأ بكثير.",
+    deepScanNotice: "فحص عميق جارٍ — استعلام NVD من الصفر لكل برنامج، قد يستغرق عدة دقائق.",
+    deepScanConfirm: "الفحص العميق يتجاهل كل النتائج المخزّنة ويسأل NVD من جديد عن كل برنامج مثبّت.\n\nبدون مفتاح NVD قد يستغرق أكثر من 10 دقائق (حد 5 طلبات لكل 30 ثانية). هل تريد المتابعة؟",
     stageReady: "جاهز",
+    p3dState: "الحالة",
+    p3dHint: "انقر أي وكيل لعرض تفاصيله",
     stageOrchestrator: "المنسّق",
     stageThreatHunter: "صائد التهديدات",
     stageAssetAuditor: "مدقق الأصول",
@@ -105,7 +112,8 @@ const I18N = {
     kdHardExploit: "استغلالها صعب (محلي/معقّد)",
     kdFixedReview: "مُصلحة/تحتاج مراجعة",
     kdCriticalNote: "<strong>يُفسّر ذلك ظهور ثغرات حرجة دون تحديثات متاحة:</strong> كثير منها قديم ومُصلَّح بنسختك الحالية، أو بلا تحديث صادر بعد، أو يحتاج وصولاً محلياً للجهاز. فقط «عاجلة فعلاً» تستحق إجراءً الآن.",
-    kdAssetsLead: "عدد البرامج التي طابقت ثغرة واحدة على الأقل، مقابل ما فُحص وما استُثني.",
+    kdAssetsLead: "الرقم أعلاه = البرامج التي فُحصت فعلياً. البارات توضّح كم منها طابق ثغرة، وكم استُثني ولماذا.",
+    kdInstalledTotal: "إجمالي البرامج المثبّتة على الجهاز",
     kdWithFindings: "برامج بها تطابقات",
     kdScannedClean: "بلا تطابقات",
     kdExcludedGames: "مستثنى (ألعاب)",
@@ -206,7 +214,14 @@ const I18N = {
     subtitle: "Scans the software installed on your machine, matches it against the official NVD vulnerability database, and surfaces winget updates — all locally, at no cost.",
     runScan: "Run scan",
     running: "Running…",
+    deepScan: "Deep scan",
+    deepScanRunning: "Deep scan running…",
+    deepScanHint: "Ignores cached results and re-queries NVD for every program — more thorough, much slower.",
+    deepScanNotice: "Deep scan running — querying NVD from scratch for every program, this may take several minutes.",
+    deepScanConfirm: "A deep scan ignores all cached results and re-queries NVD for every installed program.\n\nWithout an NVD API key this can take over 10 minutes (5 requests per 30 seconds limit). Continue?",
     stageReady: "Ready",
+    p3dState: "Status",
+    p3dHint: "Click any agent to see its details",
     stageOrchestrator: "Orchestrator",
     stageThreatHunter: "Threat Hunter",
     stageAssetAuditor: "Asset Auditor",
@@ -301,7 +316,8 @@ const I18N = {
     kdHardExploit: "Hard to exploit (local/complex)",
     kdFixedReview: "Fixed / needs review",
     kdCriticalNote: "<strong>This is why you see critical findings with no updates:</strong> many are old and already fixed in your current version, or have no released update yet, or need local access to the machine. Only \"actually urgent\" warrants action now.",
-    kdAssetsLead: "How many programs matched at least one vulnerability, versus what was scanned and excluded.",
+    kdAssetsLead: "The number above is how many programs were actually scanned. The bars show how many matched a vulnerability, and what was excluded and why.",
+    kdInstalledTotal: "Total programs installed on this machine",
     kdWithFindings: "Programs with matches",
     kdScannedClean: "No matches",
     kdExcludedGames: "Excluded (games)",
@@ -439,13 +455,13 @@ function applyStaticTranslations() {
   document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
     el.setAttribute("aria-label", t(el.dataset.i18nAria));
   });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    el.setAttribute("title", t(el.dataset.i18nTitle));
+  });
   document.querySelectorAll("[data-i18n-html]").forEach((el) => {
     // trusted, app-authored static content only (help-box step lists) —
     // never used for anything derived from user/network input
     el.innerHTML = t(el.dataset.i18nHtml);
-  });
-  document.querySelectorAll(".stage-arrow").forEach((el) => {
-    el.textContent = I18N[currentLang]._arrow;
   });
 }
 

@@ -618,16 +618,36 @@ def inv_includes_installed_version():
     row = "Telegram Desktop".ljust(20) + "Telegram.TelegramDesktop".ljust(28) + "5.2.1".ljust(12) + "winget"
     fake_stdout = f"{header}\n{sep}\n{row}\n"
     orig_run = asset_auditor.subprocess.run
+    # _load_winget_assets() writes the inventory snapshot as a side effect.
+    # Left unpatched, this one-row fixture overwrote the REAL
+    # inventory_snapshot.json, so after any test run the app's UI reported
+    # "1 program scanned" for a machine with 183 installed — test state
+    # leaking into production data the user actually reads.
+    orig_snapshot = asset_auditor.SNAPSHOT_PATH
 
     def fake_run(*a, **k):
         return subprocess.CompletedProcess(a[0] if a else [], 0, fake_stdout, "")
 
-    asset_auditor.subprocess.run = fake_run
-    try:
-        assets = asset_auditor._load_winget_assets()
-    finally:
-        asset_auditor.subprocess.run = orig_run
+    with tempfile.TemporaryDirectory() as tmp:
+        asset_auditor.subprocess.run = fake_run
+        asset_auditor.SNAPSHOT_PATH = Path(tmp) / "inventory_snapshot.json"
+        try:
+            assets = asset_auditor._load_winget_assets()
+        finally:
+            asset_auditor.subprocess.run = orig_run
+            asset_auditor.SNAPSHOT_PATH = orig_snapshot
     return (len(assets) == 1 and assets[0] == "Telegram Desktop 5.2.1"), str(assets)
+
+
+@test("Inventory Filtering", "الاختبارات لا تكتب فوق inventory_snapshot.json الحقيقي",
+      "ملف اللقطة الحقيقي غير معدَّل بعد تشغيل _load_winget_assets بمخرجات وهمية",
+      "SNAPSHOT_PATH معزول داخل الاختبار", "Test Isolation / Data Integrity")
+def inv_snapshot_not_polluted_by_tests():
+    real = asset_auditor.SNAPSHOT_PATH
+    before = real.read_bytes() if real.is_file() else None
+    inv_includes_installed_version()
+    after = real.read_bytes() if real.is_file() else None
+    return before == after, "inventory_snapshot.json تغيّر أثناء الاختبار"
 
 
 # ============================================================

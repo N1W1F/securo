@@ -39,7 +39,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 (function setupReveal() {
   // only blocks WITHOUT an existing keyframe entry animation — avoids a
   // cascade fight between .reveal's opacity:0 and animation:riseIn's fill.
-  const targets = document.querySelectorAll(".pipeline, .panel");
+  const targets = document.querySelectorAll(".pipeline3d, .panel");
   if (!("IntersectionObserver" in window) || !targets.length) {
     targets.forEach((el) => el.classList.add("is-in"));
     return;
@@ -102,6 +102,9 @@ async function postJSON(path, body) {
 const runBtn = document.getElementById("runBtn");
 const btnLabel = runBtn.querySelector(".btn-label");
 const spinner = runBtn.querySelector(".spinner");
+const deepRunBtn = document.getElementById("deepRunBtn");
+const deepLabel = deepRunBtn && deepRunBtn.querySelector(".btn-label");
+const deepSpinner = deepRunBtn && deepRunBtn.querySelector(".spinner");
 const logBox = document.getElementById("logBox");
 const logCount = document.getElementById("logCount");
 const reportBox = document.getElementById("reportBox");
@@ -129,12 +132,8 @@ document.querySelectorAll(".section-toggle").forEach((btn) => {
   else updateSectionToggleLabel(btn);
 });
 
-const STAGE_MAP = {
-  Orchestrator: "orchestrator",
-  "Threat Hunter": "hunter",
-  "Asset Auditor": "auditor",
-  Remediation: "remediation",
-};
+// (the flat stage cards were replaced by the live 3D agent orbit — the log
+// to agent mapping now lives in pipeline3d.js, which owns that panel)
 
 let pollTimer = null;
 let lastLogLen = -1;
@@ -177,21 +176,6 @@ function agentClassFor(line) {
   if (line.includes("(Remediation)")) return "log-line-remediation";
   if (line.includes("[ERROR]")) return "log-line-error";
   return "";
-}
-
-function updateStagesFromLog(lines) {
-  const seen = new Set();
-  for (const line of lines) {
-    for (const [label, key] of Object.entries(STAGE_MAP)) {
-      if (line.includes(`(${label})`)) seen.add(key);
-    }
-  }
-  document.querySelectorAll(".stage").forEach((el) => {
-    const done = seen.has(el.dataset.stage);
-    el.dataset.active = String(done);
-    el.dataset.done = String(done);
-    el.querySelector(".stage-status").textContent = done ? t("stageDone") : t("stageReady");
-  });
 }
 
 function renderLog(lines) {
@@ -359,7 +343,15 @@ function renderRunStatus() {
   runStatusMeta.textContent = inv.updated_at
     ? `${inv.scanned || 0} ${t("scannedUnit")} · ${excludedTotal} ${t("excludedUnit")}${excludedDetail}${elapsed}`
     : elapsed;
+  // The assets KPI is fed by the inventory snapshot, which arrives on /api/status
+  // rather than with the report — refresh it when that number actually changes
+  // instead of re-parsing the whole report markdown on every poll tick.
+  if (lastReportMarkdown && inv.scanned !== _lastScannedSeen) {
+    _lastScannedSeen = inv.scanned;
+    updateKpisFromReport();
+  }
 }
+let _lastScannedSeen;
 
 async function poll() {
   let state;
@@ -384,18 +376,22 @@ async function poll() {
 
   if (state.log.length !== lastLogLen) {
     renderLog(state.log);
-    updateStagesFromLog(state.log);
     lastLogLen = state.log.length;
   }
 
   if (state.running) {
     runBtn.disabled = true;
     btnLabel.textContent = t("running");
-    spinner.hidden = false;
+    // Which button spins follows which KIND of scan is running, so a deep
+    // scan triggered from either button (or resumed after a page reload)
+    // shows its progress on the deep button, not the quick one.
+    spinner.hidden = !!state.deep;
+    setDeepBusy(true, !!state.deep);
   } else {
     runBtn.disabled = false;
     btnLabel.textContent = t("runScan");
     spinner.hidden = true;
+    setDeepBusy(false, false);
     if (state.done) {
       clearInterval(pollTimer);
       pollTimer = null;
@@ -416,24 +412,38 @@ function beginScanPolling() {
   poll();
 }
 
+function setDeepBusy(busy, spinning) {
+  if (!deepRunBtn) return;
+  deepRunBtn.disabled = busy;
+  deepSpinner.hidden = !spinning;
+  deepLabel.textContent = spinning ? t("deepScanRunning") : t("deepScan");
+}
+
 function resetRunButton() {
   runBtn.disabled = false;
   btnLabel.textContent = t("runScan");
   spinner.hidden = true;
+  setDeepBusy(false, false);
 }
 
-runBtn.addEventListener("click", async () => {
-  // Disabled synchronously, before the first await — poll() only disables
-  // it after the first /api/status round-trip completes, leaving a window
-  // where a fast double-click fires /api/run twice.
+async function startScan({ deep }) {
+  // Both buttons are disabled synchronously, before the first await — poll()
+  // only disables them after the first /api/status round-trip completes,
+  // leaving a window where a fast double-click fires /api/run twice.
   runBtn.disabled = true;
-  btnLabel.textContent = t("running");
-  spinner.hidden = false;
+  setDeepBusy(true, deep);
+  if (deep) {
+    runStatus.dataset.state = "running";
+    runStatusText.textContent = t("deepScanNotice");
+  } else {
+    btnLabel.textContent = t("running");
+    spinner.hidden = false;
+  }
   lastLogLen = -1;
   lastReportMarkdown = null;
   renderReport();
   try {
-    const res = await postJSON("/api/run");
+    const res = await postJSON("/api/run", { deep });
     if (!res.ok) throw new Error(`run ${res.status}`);
   } catch {
     // Without this the await threw, the poll loop below was never reached,
@@ -445,7 +455,15 @@ runBtn.addEventListener("click", async () => {
     return;
   }
   beginScanPolling();
-});
+}
+
+runBtn.addEventListener("click", () => startScan({ deep: false }));
+if (deepRunBtn) {
+  deepRunBtn.addEventListener("click", () => {
+    if (!confirm(t("deepScanConfirm"))) return;
+    startScan({ deep: true });
+  });
+}
 
 document.querySelectorAll(".view-opt").forEach((b) =>
   b.addEventListener("click", () => { if (b.dataset.view) setView(b.dataset.view); })
@@ -833,6 +851,9 @@ const _TIER_COLORS = {
   good: ["var(--green)", "var(--cyan)"],
   warn: ["var(--amber)", "var(--sev-med)"],
   danger: ["var(--blood-bright)", "var(--blood-dim)"],
+  // inventory size is a fact, not a verdict — a machine with lots of software
+  // installed is not "in danger" for that reason alone
+  neutral: ["var(--violet)", "var(--cyan)"],
 };
 
 function setKpiAccent(card, level) {
@@ -861,6 +882,12 @@ function countLevel(n, dangerAt) {
   return "danger";
 }
 
+// How many assets the last inventory pass actually examined (winget total
+// minus games/redistributables). 0 when no inventory snapshot exists yet.
+function scannedAssetCount() {
+  return (lastStatus.inventory || {}).scanned || 0;
+}
+
 function updateKpisFromReport() {
   if (!lastReportMarkdown) return;
   const assets = parseReport(lastReportMarkdown);
@@ -868,10 +895,19 @@ function updateKpisFromReport() {
   const critHigh = (counts.CRITICAL || 0) + (counts.HIGH || 0);
   kpiFindings.textContent = total;
   kpiCritical.textContent = critHigh;
-  kpiAssets.textContent = assets.length;
+  // The card is labelled "أصول مفحوصة", so it must show how many assets the
+  // scan actually examined — not how many came back with findings. Those are
+  // very different numbers (156 examined vs 59 with findings on a real
+  // machine) and showing the smaller one under that label made the app look
+  // like it had only seen a third of the installed software.
+  kpiAssets.textContent = scannedAssetCount() || assets.length;
   setKpiAccent(kpiCardFindings, countLevel(total, 100));
   setKpiAccent(kpiCardCritical, countLevel(critHigh, 10));
-  setKpiAccent(kpiCardAssets, countLevel(assets.length, 30));
+  // The card now shows how many assets were scanned, which is not a risk
+  // number at all — colouring it red because the machine has a lot of
+  // software installed was alarming for no reason. Risk lives in the
+  // findings / critical cards.
+  setKpiAccent(kpiCardAssets, "neutral");
   if (kpiDetailKind) renderKpiDetail(kpiDetailKind); // keep an open drawer fresh
 }
 
@@ -985,8 +1021,10 @@ function renderKpiDetail(kind) {
     const inv = lastStatus.inventory || {};
     const scanned = inv.scanned || 0;
     const exG = inv.excluded_games || 0, exR = inv.excluded_redist || 0;
-    html = `<h4>${escapeHtml(t("kpiAssets"))} — ${assets.length}</h4>
+    const installed = inv.total || (scanned + exG + exR);
+    html = `<h4>${escapeHtml(t("kpiAssets"))} — ${scanned || assets.length}</h4>
       <p class="kd-lead">${escapeHtml(t("kdAssetsLead"))}</p>
+      ${installed ? `<p class="kd-note">${escapeHtml(t("kdInstalledTotal"))}: ${installed}</p>` : ""}
       <div class="kd-bars">
         ${_bar(escapeHtml(t("kdWithFindings")), assets.length, scanned || assets.length || 1, cViolet)}
         ${_bar(escapeHtml(t("kdScannedClean")), Math.max(scanned - assets.length, 0), scanned || 1, cGreen)}
@@ -1525,8 +1563,9 @@ window.onLangChange = function () {
   document.querySelectorAll(".section-toggle").forEach(updateSectionToggleLabel);
   renderRunStatus();
   renderLog(lastStatus.log || []);
-  updateStagesFromLog(lastStatus.log || []);
   btnLabel.textContent = lastStatus.running ? t("running") : t("runScan");
+  if (deepLabel) deepLabel.textContent = lastStatus.running && lastStatus.deep
+    ? t("deepScanRunning") : t("deepScan");
   renderReport();
   renderUpgLog();
   renderUpdateRows();

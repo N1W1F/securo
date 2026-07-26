@@ -22,6 +22,7 @@ Security posture (mapped to OWASP Top 10:2021):
     - Request bodies are size-capped and Content-Length is parsed defensively.
 """
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -37,6 +38,7 @@ from agents import package_manager
 from agents import asset_auditor
 from agents import analyst
 from agents import kev_checker
+from agents import threat_hunter
 from agents import decision as decision_agent
 import history
 import appconfig
@@ -87,12 +89,30 @@ STATIC_FILES = {
     "/icons.js": "application/javascript; charset=utf-8",
     "/scene3d.js": "application/javascript; charset=utf-8",
     "/vendor/three.min.js": "application/javascript; charset=utf-8",
+    # ESM build + post-processing addons (bloom). Bare "three" specifiers in
+    # the addons were rewritten to relative paths so no <script type="importmap">
+    # is needed — an inline importmap would be blocked by our own CSP.
+    "/vendor/three/three.module.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/EffectComposer.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/RenderPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/ShaderPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/UnrealBloomPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/OutputPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/MaskPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/Pass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/shaders/CopyShader.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/shaders/LuminosityHighPassShader.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/shaders/OutputShader.js": "application/javascript; charset=utf-8",
+    "/pipeline3d.js": "application/javascript; charset=utf-8",
+    "/mesh-lab.html": "text/html; charset=utf-8",
+    "/mesh-lab.css": "text/css; charset=utf-8",
     "/favicon.ico": "image/x-icon",
     "/icon.png": "image/png",
 }
 
 _state_lock = threading.Lock()
-_state = {"running": False, "done": False, "log": [], "exit_code": None, "started_at": None}
+_state = {"running": False, "done": False, "log": [], "exit_code": None,
+          "started_at": None, "deep": False}
 
 _decision_lock = threading.Lock()
 _decision_state = {"health_score": None, "items": []}
@@ -195,7 +215,7 @@ def _spawn(target) -> None:
     threading.Thread(target=target, daemon=True).start()
 
 
-def _try_start_orchestrator(spawn=None) -> bool:
+def _try_start_orchestrator(spawn=None, deep: bool = False) -> bool:
     """Atomically claim the 'scan running' flag and start the pipeline
     thread. Returns False if a scan is already running (the claim failed),
     so two near-simultaneous triggers can never spawn two subprocesses that
@@ -208,11 +228,12 @@ def _try_start_orchestrator(spawn=None) -> bool:
         _state["log"] = []
         _state["exit_code"] = None
         _state["started_at"] = time.time()
-    (spawn or _spawn)(_run_orchestrator)
+        _state["deep"] = bool(deep)
+    (spawn or _spawn)(lambda: _run_orchestrator(deep=deep))
     return True
 
 
-def _run_orchestrator():
+def _run_orchestrator(deep: bool = False):
     # state was claimed + initialized by _try_start_orchestrator() under the
     # lock before this thread started — do NOT re-init here.
     #
@@ -223,6 +244,10 @@ def _run_orchestrator():
     # answers "already running" until the app is restarted.
     exit_code = None
     try:
+        # Copy the parent environment rather than replacing it: the scan needs
+        # PATH (winget), SystemRoot, etc. Only the deep-scan switch is added.
+        env = dict(os.environ)
+        env[threat_hunter.DEEP_SCAN_ENV] = "1" if deep else "0"
         proc = subprocess.Popen(
             _SCAN_CMD,
             cwd=str(APP_DIR),
@@ -230,6 +255,7 @@ def _run_orchestrator():
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
         )
         for line in proc.stdout:
             with _state_lock:
@@ -577,8 +603,14 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/run":
-            if _try_start_orchestrator():
-                self._json({"status": "started"})
+            raw = self._read_body()
+            try:
+                body = json.loads(raw or b"{}") if raw is not None else {}
+            except json.JSONDecodeError:
+                body = {}
+            deep = bool(body.get("deep")) if isinstance(body, dict) else False
+            if _try_start_orchestrator(deep=deep):
+                self._json({"status": "started", "deep": deep})
             else:
                 self._json({"status": "already_running"})
 

@@ -35,7 +35,8 @@
   }
 
   // ---------------------------------------------------------------------
-  // Scene 1: ambient particle network background
+  // Scene 1: calm deep-space starfield background (replaced the old red
+  // particle network — that read as "alarm" everywhere, all the time)
   // ---------------------------------------------------------------------
   function initAmbient() {
     const canvas = document.getElementById("scene3dBg");
@@ -52,44 +53,49 @@
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
     camera.position.z = 18;
 
-    const COUNT = 90;
-    const positions = new Float32Array(COUNT * 3);
-    for (let i = 0; i < COUNT; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 30;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 18;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 14;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-
-    const sprite = makeGlowTexture("rgba(168,85,247,0.9)");
-    const material = new THREE.PointsMaterial({
-      size: 0.9, map: sprite, transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, color: 0xa855f7,
-    });
-    const points = new THREE.Points(geo, material);
-    scene.add(points);
-
-    // sparse connective lines between near neighbors — computed once, static
-    // topology (recomputing every frame would be wasted CPU for a background)
-    const lineGeo = new THREE.BufferGeometry();
-    const linePos = [];
-    for (let i = 0; i < COUNT; i++) {
-      for (let j = i + 1; j < COUNT; j++) {
-        const dx = positions[i * 3] - positions[j * 3];
-        const dy = positions[i * 3 + 1] - positions[j * 3 + 1];
-        const dz = positions[i * 3 + 2] - positions[j * 3 + 2];
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (d < 4.2) {
-          linePos.push(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-          linePos.push(positions[j * 3], positions[j * 3 + 1], positions[j * 3 + 2]);
-        }
+    // three star layers with slightly different tints; each layer's opacity
+    // breathes on its own phase for a slow collective twinkle
+    const starLayers = [];
+    const LAYER_SPECS = [
+      { count: 220, color: 0xffffff, size: 0.32, baseOp: 0.55 },
+      { count: 140, color: 0xbfa8ff, size: 0.42, baseOp: 0.38 }, // faint violet
+      { count: 110, color: 0x9fc8ff, size: 0.26, baseOp: 0.30 }, // ice blue
+    ];
+    const sprite = makeGlowTexture("rgba(255,255,255,0.95)");
+    for (const spec of LAYER_SPECS) {
+      const pos = new Float32Array(spec.count * 3);
+      for (let i = 0; i < spec.count; i++) {
+        pos[i * 3] = (Math.random() - 0.5) * 44;
+        pos[i * 3 + 1] = (Math.random() - 0.5) * 26;
+        pos[i * 3 + 2] = (Math.random() - 0.5) * 18 - 4;
       }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const material = new THREE.PointsMaterial({
+        size: spec.size, map: sprite, transparent: true, depthWrite: false,
+        blending: THREE.AdditiveBlending, color: spec.color, opacity: spec.baseOp,
+      });
+      const points = new THREE.Points(geo, material);
+      scene.add(points);
+      starLayers.push({ points, material, baseOp: spec.baseOp, phase: Math.random() * 6.28 });
     }
-    lineGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(linePos), 3));
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x7c3aed, transparent: true, opacity: 0.12 });
-    const lines = new THREE.LineSegments(lineGeo, lineMat);
-    scene.add(lines);
+
+    // two big soft nebula glows drifting very slowly — depth without noise
+    const nebulae = [];
+    [
+      { color: "rgba(124,58,237,0.55)", x: -9, y: 5, scale: 26 },
+      { color: "rgba(34,211,238,0.35)", x: 11, y: -6, scale: 22 },
+    ].forEach((n) => {
+      const mat = new THREE.SpriteMaterial({
+        map: makeGlowTexture(n.color), transparent: true, opacity: 0.10,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      const sp = new THREE.Sprite(mat);
+      sp.position.set(n.x, n.y, -10);
+      sp.scale.setScalar(n.scale);
+      scene.add(sp);
+      nebulae.push({ sprite: sp, mat });
+    });
 
     let mouseX = 0, mouseY = 0;
     window.addEventListener("mousemove", (e) => {
@@ -114,17 +120,18 @@
     resize();
     requestAnimationFrame(resize);
 
-    let raf = null;
+    let raf = null, t = 0;
     function tick() {
       raf = requestAnimationFrame(tick);
       if (tabHidden) return;
       if (!reduceMotion) {
-        points.rotation.y += 0.0006;
-        lines.rotation.y = points.rotation.y;
-        points.rotation.x += 0.0002;
-        lines.rotation.x = points.rotation.x;
-        camera.position.x += (mouseX * 1.5 - camera.position.x) * 0.02;
-        camera.position.y += (-mouseY * 1.0 - camera.position.y) * 0.02;
+        t += 0.016;
+        for (const l of starLayers) {
+          l.points.rotation.y += 0.00025;
+          l.material.opacity = l.baseOp * (0.75 + 0.25 * Math.sin(t * 0.5 + l.phase));
+        }
+        camera.position.x += (mouseX * 1.2 - camera.position.x) * 0.02;
+        camera.position.y += (-mouseY * 0.8 - camera.position.y) * 0.02;
         camera.lookAt(0, 0, 0);
       }
       renderer.render(scene, camera);
@@ -133,12 +140,14 @@
 
     return {
       setThreatLevel(level) {
-        // level: "good" | "warn" | "danger" — recolor the whole network to
-        // reflect actual scan posture instead of staying a fixed decoration.
+        // posture now shows as a whisper, not a red sky: the violet nebula
+        // warms toward the status colour while the stars stay neutral.
         const colors = { good: 0x3ddc84, warn: 0xf5a524, danger: 0xff4d5e };
-        const c = colors[level] || 0xa855f7;
-        material.color.setHex(c);
-        lineMat.color.setHex(c);
+        const c = colors[level];
+        if (nebulae[0]) {
+          nebulae[0].mat.color.setHex(c === undefined ? 0xffffff : c);
+          nebulae[0].mat.opacity = c === undefined ? 0.10 : 0.14;
+        }
       },
       stop() { if (raf) cancelAnimationFrame(raf); },
     };
