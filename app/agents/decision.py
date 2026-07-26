@@ -68,6 +68,16 @@ def _tier_for(severity: str, exploited: bool, has_update: bool,
         return TIER_ROUTINE, urgent_reason
 
     if severity == "CRITICAL":
+        # has_update is tri-state: True / False / None. None means the winget
+        # upgrade scan has not run yet, so we genuinely DON'T KNOW whether a
+        # fix exists. Treating that as False (the old behaviour) silently
+        # demoted every CRITICAL finding to routine on a freshly-started app
+        # and emptied the urgent banner — the user saw "nothing urgent" purely
+        # because an update scan hadn't happened. Fail toward showing risk.
+        if has_update is None:
+            if _hard_to_exploit(attack_complexity, attack_vector):
+                return TIER_ROUTINE, "ثغرة حرجة لكن استغلالها يتطلب شروطاً صعبة (وصول محلي أو تعقيد عالٍ)"
+            return TIER_URGENT, "ثغرة حرجة — لم يُفحص توفّر التحديث بعد، شغّل فحص التحديثات للتأكد"
         if not has_update:
             return TIER_ROUTINE, "ثغرة حرجة لكن لا يوجد تحديث متاح حالياً لإصلاحها"
         if _hard_to_exploit(attack_complexity, attack_vector):
@@ -94,7 +104,12 @@ def decide(findings: list[dict]) -> dict:
     for f in findings:
         severity = (f.get("severity") or "UNKNOWN").upper()
         exploited = bool(f.get("exploited"))
-        has_update = bool(f.get("has_update"))
+        # Deliberately NOT bool(): has_update is tri-state and None means
+        # "update availability not checked yet". bool() flattened that to
+        # False, i.e. "no update exists", which demoted every CRITICAL
+        # finding to routine and emptied the urgent banner on a fresh start.
+        raw_update = f.get("has_update")
+        has_update = raw_update if raw_update is None else bool(raw_update)
         attack_complexity = f.get("attack_complexity") or "UNKNOWN"
         attack_vector = f.get("attack_vector") or "UNKNOWN"
         version_fixed = f.get("review_reason") == "version_fixed"

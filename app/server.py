@@ -105,10 +105,18 @@ def _normalize_product_key(name: str) -> str:
     return _VERSION_TAIL_RE.sub("", name or "").strip().lower()
 
 
-def _has_available_update(product: str) -> bool:
-    """Best-effort cross-reference against the last winget update scan —
-    lets the decision tier reflect whether there's actually an update to
-    apply, instead of nagging about something with no fix available yet.
+def _has_available_update(product: str):
+    """True / False / None — None means "we haven't checked yet".
+
+    Cross-references the last winget update scan so the decision tier can
+    reflect whether a fix actually exists, instead of nagging about
+    something with no fix available yet.
+
+    The None case matters: the upgrade scan only runs when the user asks
+    for it, so on a freshly-started app `_upg_state["items"]` is empty.
+    Returning False there claimed "no update exists" for EVERY finding,
+    which demoted every CRITICAL out of the urgent tier and left the user
+    looking at an empty urgent banner that had nothing to do with reality.
 
     Word-boundary matching, not raw substring: plain `in` containment made
     "Git" match inside "GitHub Desktop" (and "Edge" inside "Microsoft Edge
@@ -118,7 +126,10 @@ def _has_available_update(product: str) -> bool:
     if not key:
         return False
     with _upg_lock:
+        scanned = _upg_state.get("phase") in ("scanned", "applied")
         items = list(_upg_state["items"])
+    if not scanned:
+        return None  # unknown, not "no update"
     for it in items:
         it_key = _normalize_product_key(it.get("Name", ""))
         if not it_key:

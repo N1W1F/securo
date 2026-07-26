@@ -871,13 +871,48 @@ def findings_json_carries_cvss_fields():
       "Baseline")
 def product_update_match_ignores_version():
     orig_items = srv._upg_state["items"]
+    orig_phase = srv._upg_state.get("phase")
+    # phase must report a completed scan: _has_available_update returns None
+    # ("not checked yet") otherwise, which is deliberately distinct from
+    # False ("no update exists") — see the two tri-state tests below.
     srv._upg_state["items"] = [{"Id": "Telegram.TelegramDesktop", "Name": "Telegram Desktop", "Version": "7.0.1"}]
+    srv._upg_state["phase"] = "scanned"
     try:
         ok = srv._has_available_update("Telegram Desktop 7.0.2")
         no_match = srv._has_available_update("Docker Desktop 4.82.0")
     finally:
         srv._upg_state["items"] = orig_items
-    return ok and not no_match, f"match={ok} no_match={no_match}"
+        srv._upg_state["phase"] = orig_phase
+    return ok is True and no_match is False, f"match={ok} no_match={no_match}"
+
+@test("Decision Boundaries", "«لم يُفحص التحديث بعد» لا يُعامَل كـ«لا يوجد تحديث»",
+      "_has_available_update ترجع None قبل تنفيذ أي فحص تحديثات",
+      "server._has_available_update tri-state", "Baseline / Fail-Safe")
+def update_availability_unknown_before_scan():
+    orig_items = srv._upg_state["items"]
+    orig_phase = srv._upg_state.get("phase")
+    srv._upg_state["items"] = []
+    srv._upg_state["phase"] = None          # fresh app, no upgrade scan yet
+    try:
+        unknown = srv._has_available_update("Telegram Desktop 7.0.2")
+    finally:
+        srv._upg_state["items"] = orig_items
+        srv._upg_state["phase"] = orig_phase
+    return unknown is None, f"returned={unknown!r}"
+
+@test("Decision Boundaries", "ثغرة حرجة بحالة تحديث غير معروفة تبقى عاجلة",
+      "TIER_URGENT بدل خفضها لروتينية بسبب معلومة ناقصة",
+      "decision._tier_for has_update=None", "Baseline / Fail-Safe")
+def critical_with_unknown_update_stays_urgent():
+    # Locks out the bug: bool(None) is False, so an unchecked update status
+    # read as "no update exists" and every CRITICAL silently dropped out of
+    # the urgent banner on a freshly-started app.
+    res = decision_agent.decide([{
+        "id": "CVE-TEST-0001", "product": "Test App 1.0", "severity": "CRITICAL",
+        "has_update": None, "attack_complexity": "LOW", "attack_vector": "NETWORK",
+    }])
+    item = res["items"][0]
+    return item["tier"] == "urgent", f"tier={item['tier']} reason={item['reason']}"
 
 @test("Decision Boundaries", "مؤشر الصحة يُحسب بالفئة (urgent/routine) لا بالخطورة الخام", "health_score محدود بين 0 و100",
       "decision.decide tier-based penalty", "Baseline / Robustness")
