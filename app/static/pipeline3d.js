@@ -1,6 +1,6 @@
-/* Securo pipeline3d — orbital agent scene, shared by index.html (embedded
-   panel) and mesh-lab.html (fullscreen lab). All HUD elements are OPTIONAL:
-   the engine looks them up by id and skips whatever the host page lacks.
+/* Securo pipeline3d — the live orbital agent scene in the main dashboard.
+   Every HUD element is looked up by id and skipped if absent, so the scene
+   degrades cleanly if the host page omits any of them.
    Central reactor = live health score; agent satellites orbit it; the active
    agent is derived from the REAL execution log; urgent findings appear as
    red shards. Click an agent to fly the camera to it. */
@@ -10,14 +10,17 @@ import { RenderPass }     from '/vendor/three/addons/postprocessing/RenderPass.j
 import { UnrealBloomPass }from '/vendor/three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass }     from '/vendor/three/addons/postprocessing/OutputPass.js';
 
-const AGENTS = ["المنسّق","صائد التهديدات","مدقق الأصول","المعالجة"];
 const KEYS   = ["Orchestrator","Threat Hunter","Asset Auditor","Remediation"]; // server log tags
-const DESC   = [
-  "يدير خط الفحص كاملاً: يستدعي بقية الوكلاء بالترتيب ويجمع نتائجهم في التقرير النهائي.",
-  "يطابق كل برنامج مثبّت مع قاعدة ثغرات NVD الرسمية ويحدد درجة الخطورة لكل تطابق.",
-  "يجرد البرامج المثبّتة عبر winget، يستبعد الألعاب وحزم التعريفات، ويثبت أرقام الإصدارات.",
-  "يحوّل النتائج الخام إلى توصيات قابلة للتنفيذ ويميّز ما يحتاج تحديثاً عاجلاً.",
-];
+// Agent names/descriptions are read from the shared i18n table on every
+// use, not snapshotted into a const, so the scene follows the language
+// switch instead of staying in whatever language the page loaded in.
+// i18n.js is a classic script loaded before this module, so `t` exists.
+const NAME_KEYS = ["stageOrchestrator","stageThreatHunter","stageAssetAuditor","stageRemediation"];
+const DESC_KEYS = ["agentDescOrchestrator","agentDescHunter","agentDescAuditor","agentDescRemediation"];
+const tr        = k => (typeof t === "function" ? t(k) : k);
+const AGENT_N   = KEYS.length;
+const agentName = i => tr(NAME_KEYS[i]);
+const agentDesc = i => tr(DESC_KEYS[i]);
 const COL = [0xa855f7, 0x22d3ee, 0xf5a524, 0x3ddc84];
 const CSS = ["#a855f7", "#22d3ee", "#f5a524", "#3ddc84"];
 
@@ -28,7 +31,7 @@ if (canvas) init();
 function init(){
 
 const state = { active:-1, doneUpTo:0, health:null, urgent:0, total:0,
-                live:false, demo:false, selected:-1 };
+                live:false, selected:-1 };
 
 const NOISE = `
 vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
@@ -159,8 +162,8 @@ const coreRings = [];
 
 /* ---------- agent satellites (gyroscope style) ---------- */
 const ORBIT_R = 4.6;
-const P = AGENTS.map((_, i) => {
-  const a = (i / AGENTS.length) * Math.PI*2 + Math.PI/4;
+const P = KEYS.map((_, i) => {
+  const a = (i / AGENT_N) * Math.PI*2 + Math.PI/4;
   return new THREE.Vector3(Math.cos(a)*ORBIT_R, Math.sin(i*2.1)*.55, Math.sin(a)*ORBIT_R);
 });
 const shellMat = hex => new THREE.ShaderMaterial({
@@ -266,10 +269,12 @@ scene.add(new THREE.Points(dg, dustMat));
 
 /* ---------- projected labels ---------- */
 const ov = $('p3dOv');
-const labels = ov ? AGENTS.map((nm, i) => {
+const labels = ov ? KEYS.map((_, i) => {
   const d = document.createElement('div'); d.className='lbl';
-  d.innerHTML = `<div class="nm">${nm}</div><div class="st">جاهز</div>`;
-  d.querySelector('.nm').style.setProperty('color', CSS[i]); // CSSOM: CSP-safe
+  d.innerHTML = `<div class="nm"></div><div class="st"></div>`;
+  const nm = d.querySelector('.nm');
+  nm.textContent = agentName(i);
+  nm.style.setProperty('color', CSS[i]); // CSSOM: CSP-safe
   ov.appendChild(d); return d;
 }) : [];
 function updateLabels(){
@@ -283,16 +288,28 @@ function updateLabels(){
     el.style.opacity = v.z > 1 ? 0 : 1;
     const on = i === state.active, dn = i < state.doneUpTo;
     el.classList.toggle('on', on); el.classList.toggle('done', dn && !on);
-    el.querySelector('.st').textContent = on ? 'قيد التنفيذ' : (dn ? 'مكتمل' : 'جاهز');
+    el.querySelector('.st').textContent =
+      on ? tr('agentRunning') : (dn ? tr('stageDone') : tr('stageReady'));
   });
 }
+
+// The language switch re-renders [data-i18n] nodes, but these labels and the
+// agent card are built in JS, so they have to be refreshed explicitly.
+// Chain onto any existing handler instead of replacing it — app.js owns one.
+const _prevLangChange = window.onLangChange;
+window.onLangChange = function () {
+  if (typeof _prevLangChange === "function") _prevLangChange.apply(this, arguments);
+  labels.forEach((el, i) => { el.querySelector('.nm').textContent = agentName(i); });
+  if (card && !card.hidden && state.selected >= 0) {
+    cardName.textContent = agentName(state.selected);
+    cardDesc.textContent = agentDesc(state.selected);
+  }
+};
 
 /* ---------- optional HUD refs (host page may lack any of these) ---------- */
 const m0=$('m0'), m1=$('m1'), m2=$('m2'), m3=$('m3'), f0=$('f0');
 const card=$('card'), cardName=$('cardName'), cardDesc=$('cardDesc'),
       cardState=$('cardState'), cardX=$('cardX');
-const lgEl = $('lg');
-const setLog = t => { if (lgEl) lgEl.innerHTML = t; };
 
 /* ---------- picking: click an agent to focus ---------- */
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
@@ -304,9 +321,9 @@ canvas.addEventListener('click', e => {
   if (hit){
     state.selected = sats.findIndex(s => s.core === hit.object);
     if (card){
-      cardName.textContent = AGENTS[state.selected];
+      cardName.textContent = agentName(state.selected);
       cardName.style.setProperty('color', CSS[state.selected]);
-      cardDesc.textContent = DESC[state.selected];
+      cardDesc.textContent = agentDesc(state.selected);
       card.hidden = false;
     }
   } else {
@@ -326,18 +343,15 @@ let lastQueued = -1;               // tail of the queue (dedupe consecutive tags
 let lastSwitch = 0;                // when the displayed agent last changed
 let scanRunning = false;
 async function boot(){
-  const c = $('conn');
   try{
     const r = await fetch(API+'/api/config'); if(!r.ok) throw 0;
     csrf = (await r.json()).csrfToken; state.live = true;
-    if (c){ c.textContent='متصل بالتطبيق — بيانات حقيقية'; c.className='conn live'; }
   }catch{
-    state.live = false;
-    if (c){ c.textContent='التطبيق غير مفتوح — وضع عرض توضيحي'; c.className='conn off'; }
+    state.live = false;   // scene keeps rendering, just with no live numbers
   }
 }
 async function pollReal(){
-  if (!state.live || state.demo) return;
+  if (!state.live) return;
   try{
     const [s, d] = await Promise.all([
       fetch(API+'/api/status').then(r=>r.json()),
@@ -365,41 +379,13 @@ async function pollReal(){
         }
       }
     }
-    state.doneUpTo = s.running ? done : (s.done ? AGENTS.length : 0);
+    state.doneUpTo = s.running ? done : (s.done ? AGENT_N : 0);
     state.health = (d.health_score===undefined ? null : d.health_score);
     state.urgent = (d.urgent||[]).length;
     state.total  = (d.items||[]).length;
-    const last = log[log.length-1] || '';
-    setLog(s.running
-      ? `▶ <span>${AGENTS[Math.max(act,0)]}</span> — ${last.replace(/^\[INFO\]\s*/,'').slice(0,110)}`
-      : (s.done ? `✔ <span>اكتمل الفحص</span> — ${state.total} نتيجة · ${state.urgent} عاجلة` : '—'));
   }catch{ /* app closed mid-session */ }
 }
 setInterval(pollReal, 800); boot();
-
-const runBtn3d = $('run');
-if (runBtn3d) runBtn3d.addEventListener('click', async () => {
-  if (!state.live){ setLog('⚠ افتح Securo أولاً لتشغيل فحص حقيقي'); return; }
-  state.demo = false;
-  try{
-    await fetch(API+'/api/run', { method:'POST',
-      headers:{ 'Content-Type':'application/json', 'X-CSRF-Token':csrf||'' } });
-    setLog('▶ <span>بدأ الفحص الحقيقي</span> …');
-  }catch{ setLog('⚠ تعذّر بدء الفحص'); }
-});
-const demoBtn = $('demo');
-if (demoBtn) demoBtn.addEventListener('click', async () => {
-  state.demo = true;
-  state.health = 62; state.urgent = 5; state.total = 128;
-  for (let i = 0; i < AGENTS.length; i++){
-    state.active = i; state.doneUpTo = i;
-    setLog(`▶ <span>${AGENTS[i]}</span> — عرض توضيحي`);
-    await new Promise(r=>setTimeout(r,1800));
-  }
-  state.active = -1; state.doneUpTo = AGENTS.length;
-  setLog('✔ <span>اكتمل العرض التوضيحي</span>');
-  state.demo = false;
-});
 
 /* ---------- camera ---------- */
 const mouse = { x:0, y:0 };
@@ -436,7 +422,7 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
 
   // drain the hand-off queue with a minimum dwell so a cache-fast scan
   // still plays out visibly, one agent at a time
-  if (!state.demo){
+  {
     const now = performance.now();
     if (actQueue.length && now - lastSwitch >= MIN_DWELL_MS){
       state.active = actQueue.shift(); lastSwitch = now;
@@ -519,10 +505,10 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
     m1.style.setProperty('color', state.urgent>0 ? '#ff4d5e' : '');
   }
   if (m2) m2.textContent = state.total || '—';
-  if (m3) m3.textContent = state.active>=0 ? AGENTS[state.active] : '—';
+  if (m3) m3.textContent = state.active>=0 ? agentName(state.active) : '—';
   if (card && cardState && state.selected >= 0)
-    cardState.textContent = state.selected===state.active ? 'يعمل الآن'
-      : (state.selected < state.doneUpTo ? 'مكتمل' : 'بانتظار');
+    cardState.textContent = state.selected===state.active ? tr('agentRunning')
+      : (state.selected < state.doneUpTo ? tr('stageDone') : tr('agentWaiting'));
 
   composer.render();
 })();

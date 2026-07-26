@@ -88,7 +88,6 @@ STATIC_FILES = {
     "/i18n.js": "application/javascript; charset=utf-8",
     "/icons.js": "application/javascript; charset=utf-8",
     "/scene3d.js": "application/javascript; charset=utf-8",
-    "/vendor/three.min.js": "application/javascript; charset=utf-8",
     # ESM build + post-processing addons (bloom). Bare "three" specifiers in
     # the addons were rewritten to relative paths so no <script type="importmap">
     # is needed — an inline importmap would be blocked by our own CSP.
@@ -104,8 +103,6 @@ STATIC_FILES = {
     "/vendor/three/addons/shaders/LuminosityHighPassShader.js": "application/javascript; charset=utf-8",
     "/vendor/three/addons/shaders/OutputShader.js": "application/javascript; charset=utf-8",
     "/pipeline3d.js": "application/javascript; charset=utf-8",
-    "/mesh-lab.html": "text/html; charset=utf-8",
-    "/mesh-lab.css": "text/css; charset=utf-8",
     "/favicon.ico": "image/x-icon",
     "/icon.png": "image/png",
 }

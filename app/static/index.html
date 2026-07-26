@@ -131,6 +131,10 @@
               <button class="view-opt is-active" data-view="full" data-i18n="viewFull">التقرير الكامل</button>
               <button class="view-opt" data-view="summary" data-i18n="viewSummary">ملخص</button>
             </div>
+            <button id="printBtn" class="btn-outline btn-sm" type="button" data-i18n-title="printHint">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 8V3h10v5M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7 14h10v7H7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+              <span data-i18n="printBtn">طباعة / PDF</span>
+            </button>
             <span id="reportMeta" class="badge-muted" data-i18n="metaNone">لا يوجد بعد</span>
           </div>
         </div>
@@ -260,6 +264,16 @@
 
   </div>
 
+  <div class="modal-backdrop" id="confirmModal" hidden>
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmText">
+      <p id="confirmText"></p>
+      <div class="modal-actions">
+        <button id="confirmCancel" class="btn-outline" type="button" data-i18n="cancelBtn">إلغاء</button>
+        <button id="confirmOk" class="btn-primary" type="button" data-i18n="confirmBtn">تأكيد</button>
+      </div>
+    </div>
+  </div>
+
   <aside class="activity-rail">
     <div class="panel-head">
       <h2 data-i18n="logTitle">سجل التنفيذ المباشر</h2>
@@ -271,9 +285,8 @@
 </div>
 <script src="/i18n.js"></script>
 <script src="/icons.js"></script>
-<script src="/vendor/three.min.js"></script>
-<script src="/scene3d.js"></script>
 <script src="/app.js"></script>
+<script type="module" src="/scene3d.js"></script>
 <script type="module" src="/pipeline3d.js"></script>
 </body>
 </html>
