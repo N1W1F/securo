@@ -1206,5 +1206,112 @@ def main():
     return 0 if summary["failed"] == 0 else 1
 
 
+
+# ============================================================
+# 27. UPDATE-COVERAGE RECOVERY — winget's `upgrade` check only considers
+#     packages that carry a catalog Source. On a real machine that was 67 of
+#     183 installed programs; the other 116 (Discord, Brave, ChatGPT...) had
+#     their updates silently invisible, which is what "some programs have an
+#     update but never show up in the list" actually was.
+#     Recovery does an exact-name catalog lookup + strict version compare.
+#     These tests pin the guards that keep it from INVENTING updates, which
+#     would be worse than the gap it closes.
+# ============================================================
+
+@test("Update Coverage", "مقارنة الإصدارات ترفض أي نص غير رقمي بدل تخمينه",
+      "_is_newer ترجع False لكل إصدار غير قابل للتحليل",
+      "package_manager._version_tuple يرجع None فتتوقف المقارنة", "Baseline / Data Integrity")
+def upd_version_compare_is_conservative():
+    cases = [
+        ("1.0.9249", "1.0.9246", True),    # genuine newer build
+        ("1.2.1",    "1.2",      True),    # deeper but greater
+        ("1.2",      "1.2.0",    False),   # zero-padded equal, not newer
+        ("1.0",      "1.0",      False),
+        ("Unknown",  "1.0",      False),   # winget's own placeholder
+        ("1.0",      "Unknown",  False),
+        ("",         "1.0",      False),
+        ("abc",      "1.0",      False),   # not a version at all
+        ("1.0",      "23H2",     False),   # Windows-style build label
+    ]
+    bad = [(a, b, want) for a, b, want in cases
+           if package_manager._is_newer(a, b) is not want]
+    return not bad, f"mismatches: {bad}"
+
+
+@test("Update Coverage", "لا يُخترع تحديث لبرنامج مثبّت أصلاً تحت معرّفه الخاص",
+      "الصف المطابق يُتجاهل لأن winget يتتبّع الحزمة الحقيقية بالفعل",
+      "installed_ids guard في _recover_untracked_upgrades", "Data Integrity / False Positive")
+def upd_recovery_skips_already_installed_package():
+    # The real regression: this machine lists BOTH
+    #   "WinRAR" -> MSIX\WinRAR.ShellExtension_1.0.0.2  (no Source, v1.0.0.2)
+    #   "WinRAR 7.23 (64-bit)" -> RARLab.WinRAR         (winget, v7.23.0, current)
+    # Matching the shell extension's name to RARLab.WinRAR and comparing
+    # 1.0.0.2 against 7.23.0 invented an update for software already current.
+    untracked = [{"Name": "WinRAR", "Id": "MSIX\WinRAR.ShellExtension_1.0.0.2_x64",
+                  "Version": "1.0.0.2", "Available": "", "Source": ""}]
+    installed_ids = {"rarlab.winrar", "msix\winrar.shellextension_1.0.0.2_x64"}
+    orig = package_manager._search_exact
+    package_manager._search_exact = lambda name: [
+        {"Name": "WinRAR", "Id": "RARLab.WinRAR", "Version": "7.23.0", "Source": "winget"}]
+    try:
+        out = package_manager._recover_untracked_upgrades(untracked, installed_ids)
+    finally:
+        package_manager._search_exact = orig
+    return out == [], f"invented an update: {out}"
+
+
+@test("Update Coverage", "تعدّد نتائج البحث يُسقِط الترشيح بدل اختيار واحد عشوائياً",
+      "لا يُرجَع أي تحديث عند وجود أكثر من حزمة مطابقة",
+      "len(matches) != 1 guard", "Data Integrity / False Positive")
+def upd_recovery_skips_ambiguous_match():
+    untracked = [{"Name": "Player", "Id": "ARP\Machine\X64\{abc}",
+                  "Version": "1.0", "Available": "", "Source": ""}]
+    orig = package_manager._search_exact
+    package_manager._search_exact = lambda name: [
+        {"Name": "Player", "Id": "VendorA.Player", "Version": "9.0", "Source": "winget"},
+        {"Name": "Player", "Id": "VendorB.Player", "Version": "9.0", "Source": "winget"}]
+    try:
+        out = package_manager._recover_untracked_upgrades(untracked, set())
+    finally:
+        package_manager._search_exact = orig
+    return out == [], f"picked one of two ambiguous matches: {out}"
+
+
+@test("Update Coverage", "تحديث حقيقي مفقود من فحص winget يُسترجَع فعلاً",
+      "يُرجَع صف تحديث واحد موسوم Recovered بالإصدار الأحدث",
+      "_recover_untracked_upgrades exact-name path", "Baseline / Coverage")
+def upd_recovery_finds_genuinely_missed_update():
+    # Discord: installed app-1.0.9246 on disk, catalog 1.0.9249, no Source in
+    # `winget list` -> invisible to `winget upgrade`.
+    untracked = [{"Name": "Discord", "Id": "ARP\Machine\X64\{Discord}",
+                  "Version": "1.0.9246", "Available": "", "Source": ""}]
+    orig = package_manager._search_exact
+    package_manager._search_exact = lambda name: [
+        {"Name": "Discord", "Id": "Discord.Discord", "Version": "1.0.9249", "Source": "winget"}]
+    try:
+        out = package_manager._recover_untracked_upgrades(untracked, {"arp\machine\x64\{discord}"})
+    finally:
+        package_manager._search_exact = orig
+    ok = (len(out) == 1 and out[0]["Id"] == "Discord.Discord"
+          and out[0]["Available"] == "1.0.9249" and out[0].get("Recovered") is True)
+    return ok, str(out)
+
+
+@test("Update Coverage", "صف بإصدار غير قابل للتحليل لا يُستعلَم عنه أصلاً",
+      "لا يُرجَع تحديث لبرنامج إصداره Unknown",
+      "فلترة _version_tuple قبل البحث", "Baseline / Data Integrity")
+def upd_recovery_ignores_unknown_installed_version():
+    untracked = [{"Name": "Mystery App", "Id": "ARP\X\{q}",
+                  "Version": "Unknown", "Available": "", "Source": ""}]
+    called = []
+    orig = package_manager._search_exact
+    package_manager._search_exact = lambda name: called.append(name) or []
+    try:
+        out = package_manager._recover_untracked_upgrades(untracked, set())
+    finally:
+        package_manager._search_exact = orig
+    return out == [] and not called, f"out={out} searched={called}"
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

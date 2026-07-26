@@ -56,8 +56,14 @@ const I18N = {
     updateAll: "تحديث الكل",
     updatesEmpty: 'اضغط "فحص التحديثات المتاحة" لعرض البرامج القابلة للتحديث عبر winget.',
     updatesNone: "لا توجد تحديثات متاحة حالياً — كل شيء محدث.",
-    updCoverage: (tracked, total, untracked) =>
-      `يتتبّع winget التحديثات لـ ${tracked} من أصل ${total} برنامجاً مثبّتاً. الـ${untracked} المتبقية غير مسجّلة في winget (ثُبّتت يدوياً أو تُحدّث نفسها ذاتياً) ولا يمكن فحص تحديثاتها من هنا — راجعها من داخل البرنامج نفسه.`,
+    updCoverage: (tracked, total, untracked, recovered) =>
+      `يتتبّع winget التحديثات لـ ${tracked} من أصل ${total} برنامجاً مثبّتاً مباشرةً.` +
+      (recovered
+        ? ` وقد استرجعنا ${recovered} تحديثاً إضافياً بمطابقة الاسم بدقّة مع كتالوج winget — تحديثات لم يكن أمر winget upgrade ليعرضها.`
+        : ``) +
+      ` بقية البرامج غير المسجّلة في winget (ثُبّتت يدوياً أو تُحدّث نفسها ذاتياً) قد لا تظهر تحديثاتها هنا — راجعها من داخل البرنامج نفسه.`,
+    updRecoveredTag: "مكتشَف بمطابقة الاسم",
+    updRecoveredHint: "لم يعرضه فحص winget القياسي؛ عُثر عليه بمطابقة اسم البرنامج مع كتالوج winget ومقارنة رقم الإصدار.",
     updateBtn: "تحديث",
     updOk: "✓ تم",
     updFail: "✗ فشل",
@@ -271,8 +277,14 @@ const I18N = {
     updateAll: "Update all",
     updatesEmpty: 'Click "Scan for updates" to list software upgradable via winget.',
     updatesNone: "No updates available right now — everything is up to date.",
-    updCoverage: (tracked, total, untracked) =>
-      `winget tracks updates for ${tracked} of ${total} installed programs. The other ${untracked} aren't registered with winget (installed manually, or they self-update) and can't be checked from here — review those in the applications themselves.`,
+    updCoverage: (tracked, total, untracked, recovered) =>
+      `winget tracks updates for ${tracked} of ${total} installed programs directly.` +
+      (recovered
+        ? ` We recovered ${recovered} more by exact-name match against the winget catalog — updates the standard winget upgrade check would not have shown.`
+        : ``) +
+      ` The rest aren't registered with winget (installed manually, or they self-update) and their updates may not appear here — review those in the applications themselves.`,
+    updRecoveredTag: "found by name match",
+    updRecoveredHint: "Not reported by the standard winget upgrade check; found by matching the program name against the winget catalog and comparing version numbers.",
     updateBtn: "Update",
     updOk: "✓ Done",
     updFail: "✗ Failed",

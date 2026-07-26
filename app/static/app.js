@@ -615,7 +615,7 @@ function renderUpgProgress(p) {
 function coverageNote() {
   const c = (lastUpg && lastUpg.coverage) || null;
   if (!c || !c.total || !c.untracked) return "";
-  return `<p class="upd-coverage">${escapeHtml(t("updCoverage", c.tracked, c.total, c.untracked))}</p>`;
+  return `<p class="upd-coverage">${escapeHtml(t("updCoverage", c.tracked, c.total, c.untracked, c.recovered || 0))}</p>`;
 }
 
 function renderUpdateRows() {
@@ -645,7 +645,10 @@ function renderUpdateRows() {
       const meta = metaText(detailsCache[it.Id] || undefined);
       return `<div class="upd-row" data-id="${escapeHtml(it.Id)}">
         <div class="upd-main">
-          <span class="upd-name">${escapeHtml(it.Name || it.Id)}</span>
+          <span class="upd-name">${escapeHtml(it.Name || it.Id)}</span>${
+            it.Recovered
+              ? `<span class="upd-recovered" title="${escapeHtml(t("updRecoveredHint"))}">${escapeHtml(t("updRecoveredTag"))}</span>`
+              : ""}
           <span class="upd-meta" data-id="${escapeHtml(it.Id)}">${escapeHtml(meta)}</span>
         </div>
         <span class="upd-ver" dir="ltr">${escapeHtml(it.Version || "")} → ${escapeHtml(it.Available || "")}</span>

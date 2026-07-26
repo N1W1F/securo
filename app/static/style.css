@@ -636,6 +636,13 @@ body::before{
 
 .btn-sm{padding:6px 12px !important;font-size:11.5px !important;}
 .inline-msg{font-size:11.5px;color:var(--amber);align-self:center;}
+/* marks an update the standard winget upgrade check never reported — found
+   by matching the installed product name against the catalog instead */
+.upd-recovered{
+  margin-inline-start:8px;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:600;
+  color:var(--cyan);border:1px solid rgba(34,211,238,.4);background:rgba(34,211,238,.08);
+  white-space:nowrap;vertical-align:middle;cursor:help;
+}
 
 /* ---------- print / save-as-PDF ----------
    Only the report survives printing. Everything else — the 3D canvas, the

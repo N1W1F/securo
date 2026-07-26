@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,10 @@ AGENT = "Package Manager"
 
 WINGET = "winget"
 SCAN_TIMEOUT_SECS = 90
+SEARCH_TIMEOUT_SECS = 25   # one catalog lookup; measured ~0.2s
+# Independent subprocesses, so concurrency is free. Capped low so a
+# 100-package machine never spawns a process storm.
+SEARCH_WORKERS = 6
 DETAILS_TIMEOUT_SECS = 40
 UPDATE_TIMEOUT_SECS = 900
 PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.\-]{0,120}$")
@@ -68,7 +73,40 @@ def _parse_table(raw: str) -> list[dict]:
 # then thrown away, so the update simply never appeared in the UI.
 UPGRADABLE_SOURCES = {"winget", "msstore"}
 
-_last_coverage = {"total": 0, "tracked": 0, "untracked": 0}
+_last_coverage = {"total": 0, "tracked": 0, "untracked": 0, "recovered": 0}
+
+# Version strings we refuse to reason about. "Unknown" is winget's own
+# placeholder; the rest are ARP junk that never compares meaningfully.
+_UNUSABLE_VERSIONS = {"", "unknown", "none", "n/a"}
+_VERSION_PART_RE = re.compile(r"\d+")
+
+
+def _version_tuple(v: str) -> tuple | None:
+    """Numeric tuple for comparison, or None if the string isn't a version.
+
+    Deliberately conservative: anything that isn't a plain dotted number
+    ('1.2.3', '150.1.92.144') returns None, and a None on EITHER side means
+    we report nothing. Claiming a phantom update is worse than missing one —
+    it sends the user to reinstall software that is already current.
+    """
+    v = (v or "").strip()
+    if v.lower() in _UNUSABLE_VERSIONS:
+        return None
+    core = v.split("-")[0].split("+")[0]          # drop 1.2.3-beta / 1.2.3+build
+    parts = core.split(".")
+    if not all(p.isdigit() for p in parts if p != ""):
+        return None
+    nums = [int(p) for p in parts if p != ""]
+    return tuple(nums) or None
+
+
+def _is_newer(candidate: str, installed: str) -> bool:
+    a, b = _version_tuple(candidate), _version_tuple(installed)
+    if a is None or b is None:
+        return False
+    # pad so 1.2 vs 1.2.0 compares equal instead of "older"
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
 
 
 def coverage() -> dict:
@@ -108,10 +146,101 @@ def scan_upgradable() -> list[dict]:
         and r.get("Available") not in ("", "Unknown")
         and PACKAGE_ID_RE.match(r.get("Id", ""))
     ]
+
+    # Everything winget's own upgrade check cannot see — recover what we can.
+    untracked = [r for r in rows if r.get("Source") not in UPGRADABLE_SOURCES]
+    installed_ids = {(r.get("Id") or "").strip().casefold() for r in rows}
+    recovered = _recover_untracked_upgrades(untracked, installed_ids)
+    upgradable.extend(recovered)
+    _last_coverage["recovered"] = len(recovered)
+
     _last_scanned_ids = {r["Id"] for r in upgradable}
     log(AGENT, f"found {len(upgradable)} package(s) with an available update "
-               f"({len(tracked)} of {len(rows)} installed packages are update-trackable)")
+               f"({len(tracked)} of {len(rows)} installed packages are update-trackable"
+               + (f"; {len(recovered)} more recovered by name match" if recovered else "")
+               + ")")
     return upgradable
+
+
+def _search_exact(name: str) -> list[dict]:
+    """`winget search --exact` for one product name. [] on any failure.
+
+    --exact is load-bearing: a fuzzy search for "Discord" also returns
+    "Discord Canary", "BetterDiscord", etc., and picking one of those would
+    offer the user an update that replaces their software with a different
+    program.
+    """
+    try:
+        result = _run([WINGET, "search", "--name", name, "--source", "winget",
+                       "--exact", "--accept-source-agreements"], SEARCH_TIMEOUT_SECS)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    if result.returncode != 0 or not winget_table.looks_like_table(result.stdout):
+        return []          # "No package found matching input criteria." — normal
+    return winget_table.parse(result.stdout)
+
+
+def _recover_untracked_upgrades(untracked: list[dict],
+                                installed_ids: set[str]) -> list[dict]:
+    """Find updates for software winget lists but cannot upgrade-check.
+
+    Most installed software carries no winget Source: it was installed
+    outside any catalog, so `winget upgrade` never considers it and its
+    updates are invisible — on this machine that was 94 of 134 programs,
+    including Discord, which was a genuine 1.0.9246 -> 1.0.9249 behind.
+
+    The recovery is a per-name exact search of the winget catalog, then a
+    strict numeric version comparison. Both sides must parse as plain dotted
+    numbers and the catalog must be strictly newer, otherwise the entry is
+    dropped. Searches are independent processes, so they run concurrently;
+    the whole pass costs a few seconds.
+    """
+    candidates = []
+    for row in untracked:
+        name = (row.get("Name") or "").strip()
+        installed = (row.get("Version") or "").strip()
+        if not name or _version_tuple(installed) is None:
+            continue                       # nothing to compare against
+        candidates.append((name, installed))
+    if not candidates:
+        return []
+
+    def probe(pair):
+        name, installed = pair
+        matches = _search_exact(name)
+        # Ambiguity is a reason to stay silent, not to guess.
+        if len(matches) != 1:
+            return None
+        m = matches[0]
+        available, pkg_id = (m.get("Version") or "").strip(), (m.get("Id") or "").strip()
+        if not PACKAGE_ID_RE.match(pkg_id):
+            return None
+        # If that catalog package is ALREADY installed under its own row, this
+        # untracked row is a different component that merely shares a name —
+        # e.g. "WinRAR" the MSIX shell extension (1.0.0.2) alongside "WinRAR
+        # 7.23 (64-bit)" (RARLab.WinRAR, 7.23.0, current). Comparing the
+        # extension's version against the app's package invented an update for
+        # software that was already up to date. winget already tracks the real
+        # package, so there is nothing here for us to add.
+        if pkg_id.casefold() in installed_ids:
+            return None
+        if not _is_newer(available, installed):
+            return None
+        return {"Name": name, "Id": pkg_id, "Version": installed,
+                "Available": available, "Source": "winget", "Recovered": True}
+
+    try:
+        with ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
+            results = list(pool.map(probe, candidates))
+    except Exception as exc:                 # thread pool refused to start
+        log(AGENT, f"name-match recovery skipped: {type(exc).__name__}")
+        return []
+
+    found = [r for r in results if r]
+    if found:
+        log(AGENT, f"recovered {len(found)} update(s) winget's upgrade check missed "
+                   f"(exact name match across {len(candidates)} untracked package(s))")
+    return found
 
 
 def get_details(package_id: str) -> dict:

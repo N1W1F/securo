@@ -199,7 +199,7 @@ def _urgent_count_and_score() -> tuple[int, int | None]:
 
 _upg_lock = threading.Lock()
 _upg_state = {"running": False, "phase": None, "items": [], "log": [], "results": [], "progress": None,
-              "coverage": {"total": 0, "tracked": 0, "untracked": 0}}
+              "coverage": {"total": 0, "tracked": 0, "untracked": 0, "recovered": 0}}
 
 
 def _spawn(target) -> None:
