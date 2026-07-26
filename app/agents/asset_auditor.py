@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from security import BASE_DIR, INVENTORY_PATH, read_only_open, sanitize_software_name
 from audit import log
+from agents import winget_table
 
 AGENT = "Asset Auditor"
 
@@ -32,26 +33,11 @@ REDIST_RE = re.compile(
 
 
 def _parse_winget(raw: str) -> list[dict]:
-    lines = [line for line in raw.splitlines() if line.strip()]
-    header_index = next((i for i, line in enumerate(lines) if line.startswith("Name")), None)
-    if header_index is None:
-        return []
-    header = lines[header_index]
-    starts = [(key, header.find(key)) for key in ("Name", "Id", "Version", "Source")]
-    if any(pos < 0 for _, pos in starts):
-        return []
-    starts.sort(key=lambda item: item[1])
-    rows = []
-    for line in lines[header_index + 2:]:
-        if set(line.strip()) == {"-"}:
-            continue
-        fields = {}
-        for index, (key, start) in enumerate(starts):
-            end = starts[index + 1][1] if index + 1 < len(starts) else len(line)
-            fields[key] = line[start:end].strip()
-        if fields.get("Name"):
-            rows.append(fields)
-    return rows
+    # Delegates to the shared locale-independent parser. This used to match
+    # on the English header words, which returned [] on any non-English
+    # Windows (including Arabic — this app's primary audience) and made the
+    # scan silently report an empty, "clean" machine.
+    return winget_table.parse(raw)
 
 
 def _write_snapshot(payload: dict) -> None:
@@ -79,10 +65,19 @@ def _load_winget_assets() -> list[str]:
     try:
         result = subprocess.run([WINGET, "list", "--accept-source-agreements"], capture_output=True,
                                 text=True, timeout=90, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         log(AGENT, f"winget inventory failed: {type(exc).__name__}")
         _write_snapshot({**_EMPTY_STATUS, "error": "winget_unavailable"})
         return []
+
+    # "winget ran but produced nothing we can read" must never be reported
+    # as "this machine has no software" — that is an all-clear the scan
+    # never earned. Record it as an explicit error state instead.
+    if not winget_table.looks_like_table(result.stdout):
+        log(AGENT, "winget output was not a readable table — reporting as an error, not as an empty machine")
+        _write_snapshot({**_EMPTY_STATUS, "error": "winget_unreadable_output"})
+        return []
+
     rows = _parse_winget(result.stdout)
     excluded_games, excluded_redist, accepted, seen = [], [], [], set()
     for row in rows:

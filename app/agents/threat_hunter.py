@@ -15,6 +15,7 @@ sleeping. Two independent fixes, both optional and safe to skip:
      50 requests/30s; when present we shrink the sleep accordingly.
 """
 import json
+import os
 import re
 import sys
 import time
@@ -40,6 +41,17 @@ MAX_RESULTS_PER_QUERY = 5
 
 CACHE_PATH = BASE_DIR / "nvd_cache.json"
 CACHE_TTL_SECS = 24 * 3600
+
+# Deep scan: ignore every cached result and re-query NVD for all assets.
+# Carried in the environment because the scan runs as a SEPARATE process
+# (the server spawns main.py / --run-scan), so a module-level flag set in the
+# server process would never reach the hunter. Read per call, not at import,
+# so what we see is what the spawning request actually set.
+DEEP_SCAN_ENV = "SECURO_DEEP_SCAN"
+
+
+def _deep_scan() -> bool:
+    return os.environ.get(DEEP_SCAN_ENV) == "1"
 
 _VERSION_SUFFIX_RE = re.compile(r"^(?P<product>.+?)\s+(?P<version>[\d][\w.\-]*)$")
 
@@ -209,11 +221,15 @@ def hunt(assets: list[str]) -> dict[str, list[dict]]:
     now = time.time()
     min_gap = _min_seconds_between_calls()
     made_network_call = False
+    deep = _deep_scan()
+    if deep:
+        log(AGENT, f"deep scan requested — ignoring {len(cache)} cached result(s), "
+                   f"re-querying NVD for every asset")
 
     for entry in assets:
         product, version = _split_product_version(entry)
         key = _cache_key(entry)
-        cached = cache.get(key)
+        cached = None if deep else cache.get(key)
 
         if cached and (now - cached.get("ts", 0)) < CACHE_TTL_SECS:
             if cached.get("matches"):

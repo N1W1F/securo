@@ -54,11 +54,18 @@
         <h1>Securo</h1>
         <p data-i18n="subtitle">يفحص برامجك المثبّتة ويطابقها مع قاعدة ثغرات NVD الرسمية.</p>
       </div>
-      <button id="runBtn" class="btn-primary">
-        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4l14 8-14 8V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-        <span class="btn-label" data-i18n="runScan">تشغيل الفحص</span>
-        <span class="spinner" hidden></span>
-      </button>
+      <div class="topbar-actions">
+        <button id="deepRunBtn" class="btn-outline" type="button" data-i18n-title="deepScanHint">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M11 8v6M8 11h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <span class="btn-label" data-i18n="deepScan">فحص عميق</span>
+          <span class="spinner" hidden></span>
+        </button>
+        <button id="runBtn" class="btn-primary">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4l14 8-14 8V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span class="btn-label" data-i18n="runScan">تشغيل الفحص</span>
+          <span class="spinner" hidden></span>
+        </button>
+      </div>
     </header>
 
     <div id="runStatus" class="run-status" role="status" aria-live="polite">
@@ -102,30 +109,16 @@
     <div id="urgentBanner" class="urgent-banner" hidden></div>
 
     <div class="scan-context">
-    <section class="pipeline">
-      <div class="stage" data-stage="orchestrator">
-        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M15 9l-3.5 6-2.5-3.5L15 9z" fill="currentColor"/></svg></div>
-        <div class="stage-name" data-i18n="stageOrchestrator">Orchestrator</div>
-        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
+    <section class="pipeline3d">
+      <canvas id="p3d"></canvas>
+      <div class="p3d-ov" id="p3dOv"></div>
+      <div class="p3d-card" id="card" hidden>
+        <button class="p3d-card-x" id="cardX" type="button">×</button>
+        <h3 id="cardName">—</h3>
+        <p id="cardDesc">—</p>
+        <div class="p3d-card-row"><span data-i18n="p3dState">الحالة</span><b id="cardState">—</b></div>
       </div>
-      <div class="stage-arrow">←</div>
-      <div class="stage" data-stage="hunter">
-        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
-        <div class="stage-name" data-i18n="stageThreatHunter">Threat Hunter</div>
-        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
-      </div>
-      <div class="stage-arrow">←</div>
-      <div class="stage" data-stage="auditor">
-        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 13l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div class="stage-name" data-i18n="stageAssetAuditor">Asset Auditor</div>
-        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
-      </div>
-      <div class="stage-arrow">←</div>
-      <div class="stage" data-stage="remediation">
-        <div class="stage-icon"><svg viewBox="0 0 24 24" fill="none" width="22" height="22"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v5h5M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
-        <div class="stage-name" data-i18n="stageRemediation">Remediation</div>
-        <div class="stage-status" data-status="idle" data-i18n="stageReady">جاهز</div>
-      </div>
+      <span class="p3d-hint" data-i18n="p3dHint">انقر أي وكيل لعرض تفاصيله</span>
     </section>
 
     <div class="section-toggle-row"><button class="section-toggle" data-target="scanGrid" aria-expanded="true"><span class="section-toggle-label">إخفاء التقرير</span><svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
@@ -281,5 +274,6 @@
 <script src="/vendor/three.min.js"></script>
 <script src="/scene3d.js"></script>
 <script src="/app.js"></script>
+<script type="module" src="/pipeline3d.js"></script>
 </body>
 </html>

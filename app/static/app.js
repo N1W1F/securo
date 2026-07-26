@@ -39,7 +39,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 (function setupReveal() {
   // only blocks WITHOUT an existing keyframe entry animation — avoids a
   // cascade fight between .reveal's opacity:0 and animation:riseIn's fill.
-  const targets = document.querySelectorAll(".pipeline, .panel");
+  const targets = document.querySelectorAll(".pipeline3d, .panel");
   if (!("IntersectionObserver" in window) || !targets.length) {
     targets.forEach((el) => el.classList.add("is-in"));
     return;
@@ -60,17 +60,34 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 let csrfToken = null;
 
 async function loadConfig() {
-  try {
-    const res = await fetch("/api/config");
-    const cfg = await res.json();
-    csrfToken = cfg.csrfToken;
-    if (!localStorage.getItem("lang") && cfg.defaultLang) setLang(cfg.defaultLang);
-  } catch (e) {
-    /* server not ready yet; polling will retry */
+  const res = await fetch("/api/config");
+  if (!res.ok) throw new Error(`config ${res.status}`);
+  const cfg = await res.json();
+  csrfToken = cfg.csrfToken;
+  if (!localStorage.getItem("lang") && cfg.defaultLang) setLang(cfg.defaultLang);
+  return cfg;
+}
+
+// Without the CSRF token EVERY state-changing request is rejected by the
+// server. The old code swallowed a failed token fetch and left csrfToken
+// null for the life of the page — the UI looked fine but no button did
+// anything, for the whole session, with no error shown. Retry with backoff,
+// and make postJSON fetch the token on demand if it's still missing.
+async function ensureCsrfToken(attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await loadConfig();
+      if (csrfToken) return true;
+    } catch {
+      /* fall through to retry */
+    }
+    await new Promise((r) => setTimeout(r, 400 * (i + 1)));
   }
+  return !!csrfToken;
 }
 
 async function postJSON(path, body) {
+  if (!csrfToken) await ensureCsrfToken(2);
   return fetch(path, {
     method: "POST",
     headers: {
@@ -85,6 +102,9 @@ async function postJSON(path, body) {
 const runBtn = document.getElementById("runBtn");
 const btnLabel = runBtn.querySelector(".btn-label");
 const spinner = runBtn.querySelector(".spinner");
+const deepRunBtn = document.getElementById("deepRunBtn");
+const deepLabel = deepRunBtn && deepRunBtn.querySelector(".btn-label");
+const deepSpinner = deepRunBtn && deepRunBtn.querySelector(".spinner");
 const logBox = document.getElementById("logBox");
 const logCount = document.getElementById("logCount");
 const reportBox = document.getElementById("reportBox");
@@ -112,12 +132,8 @@ document.querySelectorAll(".section-toggle").forEach((btn) => {
   else updateSectionToggleLabel(btn);
 });
 
-const STAGE_MAP = {
-  Orchestrator: "orchestrator",
-  "Threat Hunter": "hunter",
-  "Asset Auditor": "auditor",
-  Remediation: "remediation",
-};
+// (the flat stage cards were replaced by the live 3D agent orbit — the log
+// to agent mapping now lives in pipeline3d.js, which owns that panel)
 
 let pollTimer = null;
 let lastLogLen = -1;
@@ -135,13 +151,18 @@ function escapeHtml(str) {
 }
 
 function animateCount(el) {
-  const target = parseInt(el.textContent, 10);
+  // Preserve any non-numeric suffix (e.g. the "%" on the success-rate card).
+  // parseInt("87%") is 87, and writing back the bare number silently dropped
+  // the percent sign 650ms after the animation started.
+  const raw = el.textContent.trim();
+  const target = parseInt(raw, 10);
   if (!Number.isFinite(target)) return;
+  const suffix = raw.slice(String(target).length);
   const dur = 650;
   const start = performance.now();
   function step(now) {
     const p = Math.min((now - start) / dur, 1);
-    el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3)));
+    el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))) + suffix;
     if (p < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
@@ -155,21 +176,6 @@ function agentClassFor(line) {
   if (line.includes("(Remediation)")) return "log-line-remediation";
   if (line.includes("[ERROR]")) return "log-line-error";
   return "";
-}
-
-function updateStagesFromLog(lines) {
-  const seen = new Set();
-  for (const line of lines) {
-    for (const [label, key] of Object.entries(STAGE_MAP)) {
-      if (line.includes(`(${label})`)) seen.add(key);
-    }
-  }
-  document.querySelectorAll(".stage").forEach((el) => {
-    const done = seen.has(el.dataset.stage);
-    el.dataset.active = String(done);
-    el.dataset.done = String(done);
-    el.querySelector(".stage-status").textContent = done ? t("stageDone") : t("stageReady");
-  });
 }
 
 function renderLog(lines) {
@@ -337,7 +343,15 @@ function renderRunStatus() {
   runStatusMeta.textContent = inv.updated_at
     ? `${inv.scanned || 0} ${t("scannedUnit")} · ${excludedTotal} ${t("excludedUnit")}${excludedDetail}${elapsed}`
     : elapsed;
+  // The assets KPI is fed by the inventory snapshot, which arrives on /api/status
+  // rather than with the report — refresh it when that number actually changes
+  // instead of re-parsing the whole report markdown on every poll tick.
+  if (lastReportMarkdown && inv.scanned !== _lastScannedSeen) {
+    _lastScannedSeen = inv.scanned;
+    updateKpisFromReport();
+  }
 }
+let _lastScannedSeen;
 
 async function poll() {
   let state;
@@ -362,18 +376,22 @@ async function poll() {
 
   if (state.log.length !== lastLogLen) {
     renderLog(state.log);
-    updateStagesFromLog(state.log);
     lastLogLen = state.log.length;
   }
 
   if (state.running) {
     runBtn.disabled = true;
     btnLabel.textContent = t("running");
-    spinner.hidden = false;
+    // Which button spins follows which KIND of scan is running, so a deep
+    // scan triggered from either button (or resumed after a page reload)
+    // shows its progress on the deep button, not the quick one.
+    spinner.hidden = !!state.deep;
+    setDeepBusy(true, !!state.deep);
   } else {
     runBtn.disabled = false;
     btnLabel.textContent = t("runScan");
     spinner.hidden = true;
+    setDeepBusy(false, false);
     if (state.done) {
       clearInterval(pollTimer);
       pollTimer = null;
@@ -385,20 +403,67 @@ async function poll() {
   }
 }
 
-runBtn.addEventListener("click", async () => {
-  // Disabled synchronously, before the first await — poll() only disables
-  // it after the first /api/status round-trip completes, leaving a window
-  // where a fast double-click fires /api/run twice.
+// Shared by the "Run scan" button and "Scan now" in settings. Previously
+// only runBtn started the poll loop, so a scheduler-triggered or
+// "Scan now" run executed with the UI frozen at "Ready" — no log, no
+// stages, no report — which reads as the app doing nothing.
+function beginScanPolling() {
+  if (!pollTimer) pollTimer = setInterval(poll, 800);
+  poll();
+}
+
+function setDeepBusy(busy, spinning) {
+  if (!deepRunBtn) return;
+  deepRunBtn.disabled = busy;
+  deepSpinner.hidden = !spinning;
+  deepLabel.textContent = spinning ? t("deepScanRunning") : t("deepScan");
+}
+
+function resetRunButton() {
+  runBtn.disabled = false;
+  btnLabel.textContent = t("runScan");
+  spinner.hidden = true;
+  setDeepBusy(false, false);
+}
+
+async function startScan({ deep }) {
+  // Both buttons are disabled synchronously, before the first await — poll()
+  // only disables them after the first /api/status round-trip completes,
+  // leaving a window where a fast double-click fires /api/run twice.
   runBtn.disabled = true;
-  btnLabel.textContent = t("running");
-  spinner.hidden = false;
+  setDeepBusy(true, deep);
+  if (deep) {
+    runStatus.dataset.state = "running";
+    runStatusText.textContent = t("deepScanNotice");
+  } else {
+    btnLabel.textContent = t("running");
+    spinner.hidden = false;
+  }
   lastLogLen = -1;
   lastReportMarkdown = null;
   renderReport();
-  await postJSON("/api/run");
-  if (!pollTimer) pollTimer = setInterval(poll, 800);
-  poll();
-});
+  try {
+    const res = await postJSON("/api/run", { deep });
+    if (!res.ok) throw new Error(`run ${res.status}`);
+  } catch {
+    // Without this the await threw, the poll loop below was never reached,
+    // and the button stayed disabled with the spinner turning forever —
+    // recoverable only by reloading the page.
+    resetRunButton();
+    runStatus.dataset.state = "error";
+    runStatusText.textContent = t("statusFailed");
+    return;
+  }
+  beginScanPolling();
+}
+
+runBtn.addEventListener("click", () => startScan({ deep: false }));
+if (deepRunBtn) {
+  deepRunBtn.addEventListener("click", () => {
+    if (!confirm(t("deepScanConfirm"))) return;
+    startScan({ deep: true });
+  });
+}
 
 document.querySelectorAll(".view-opt").forEach((b) =>
   b.addEventListener("click", () => { if (b.dataset.view) setView(b.dataset.view); })
@@ -471,13 +536,23 @@ function renderUpgProgress(p) {
   updProgress.querySelector(".upd-prog-fill").style.width = `${p.percent}%`;
 }
 
+// winget can only report updates for software it actually tracks. On a
+// typical machine most installed programs have no winget source at all
+// (installed manually, or they self-update), so "N updates" must never be
+// read as "N is everything out of date" — state the coverage explicitly.
+function coverageNote() {
+  const c = (lastUpg && lastUpg.coverage) || null;
+  if (!c || !c.total || !c.untracked) return "";
+  return `<p class="upd-coverage">${escapeHtml(t("updCoverage", c.tracked, c.total, c.untracked))}</p>`;
+}
+
 function renderUpdateRows() {
   const { items, results } = lastUpg;
   const resultById = Object.fromEntries((results || []).map((r) => [r.id, r]));
   if (!items.length) {
     updatesBox.innerHTML = `<p class="empty-hint">${escapeHtml(
       lastUpg.scanned ? t("updatesNone") : t("updatesEmpty")
-    )}</p>`;
+    )}</p>${lastUpg.scanned ? coverageNote() : ""}`;
     applyAllBtn.hidden = true;
     return;
   }
@@ -508,7 +583,7 @@ function renderUpdateRows() {
         ${errorHtml}
       </div>`;
     })
-    .join("");
+    .join("") + coverageNote();
   applyAllBtn.hidden = false;
 
   updatesBox.querySelectorAll(".upd-btn").forEach((btn) => {
@@ -543,8 +618,23 @@ function renderUpgLog() {
 }
 
 async function fetchUpgradeStatus() {
-  const res = await fetch("/api/upgrades/status");
-  const state = await res.json();
+  // Guarded: this is the body of a 900ms poll. An unguarded throw here left
+  // the Scan button disabled forever, kept the timer firing an unhandled
+  // rejection every tick, and froze the panel — reload was the only way out.
+  let state;
+  try {
+    const res = await fetch("/api/upgrades/status");
+    if (!res.ok) throw new Error(`upgrades ${res.status}`);
+    state = await res.json();
+  } catch {
+    if (upgPollTimer) {
+      clearInterval(upgPollTimer);
+      upgPollTimer = null;
+    }
+    scanBtn.disabled = false;
+    return;
+  }
+  state.items = Array.isArray(state.items) ? state.items : [];
   lastUpg = state;
   lastUpg.scanned = state.phase === "scanned" || state.phase === "applied";
 
@@ -761,6 +851,9 @@ const _TIER_COLORS = {
   good: ["var(--green)", "var(--cyan)"],
   warn: ["var(--amber)", "var(--sev-med)"],
   danger: ["var(--blood-bright)", "var(--blood-dim)"],
+  // inventory size is a fact, not a verdict — a machine with lots of software
+  // installed is not "in danger" for that reason alone
+  neutral: ["var(--violet)", "var(--cyan)"],
 };
 
 function setKpiAccent(card, level) {
@@ -789,6 +882,12 @@ function countLevel(n, dangerAt) {
   return "danger";
 }
 
+// How many assets the last inventory pass actually examined (winget total
+// minus games/redistributables). 0 when no inventory snapshot exists yet.
+function scannedAssetCount() {
+  return (lastStatus.inventory || {}).scanned || 0;
+}
+
 function updateKpisFromReport() {
   if (!lastReportMarkdown) return;
   const assets = parseReport(lastReportMarkdown);
@@ -796,10 +895,19 @@ function updateKpisFromReport() {
   const critHigh = (counts.CRITICAL || 0) + (counts.HIGH || 0);
   kpiFindings.textContent = total;
   kpiCritical.textContent = critHigh;
-  kpiAssets.textContent = assets.length;
+  // The card is labelled "أصول مفحوصة", so it must show how many assets the
+  // scan actually examined — not how many came back with findings. Those are
+  // very different numbers (156 examined vs 59 with findings on a real
+  // machine) and showing the smaller one under that label made the app look
+  // like it had only seen a third of the installed software.
+  kpiAssets.textContent = scannedAssetCount() || assets.length;
   setKpiAccent(kpiCardFindings, countLevel(total, 100));
   setKpiAccent(kpiCardCritical, countLevel(critHigh, 10));
-  setKpiAccent(kpiCardAssets, countLevel(assets.length, 30));
+  // The card now shows how many assets were scanned, which is not a risk
+  // number at all — colouring it red because the machine has a lot of
+  // software installed was alarming for no reason. Risk lives in the
+  // findings / critical cards.
+  setKpiAccent(kpiCardAssets, "neutral");
   if (kpiDetailKind) renderKpiDetail(kpiDetailKind); // keep an open drawer fresh
 }
 
@@ -913,8 +1021,10 @@ function renderKpiDetail(kind) {
     const inv = lastStatus.inventory || {};
     const scanned = inv.scanned || 0;
     const exG = inv.excluded_games || 0, exR = inv.excluded_redist || 0;
-    html = `<h4>${escapeHtml(t("kpiAssets"))} — ${assets.length}</h4>
+    const installed = inv.total || (scanned + exG + exR);
+    html = `<h4>${escapeHtml(t("kpiAssets"))} — ${scanned || assets.length}</h4>
       <p class="kd-lead">${escapeHtml(t("kdAssetsLead"))}</p>
+      ${installed ? `<p class="kd-note">${escapeHtml(t("kdInstalledTotal"))}: ${installed}</p>` : ""}
       <div class="kd-bars">
         ${_bar(escapeHtml(t("kdWithFindings")), assets.length, scanned || assets.length || 1, cViolet)}
         ${_bar(escapeHtml(t("kdScannedClean")), Math.max(scanned - assets.length, 0), scanned || 1, cGreen)}
@@ -1187,7 +1297,7 @@ function renderHistory() {
       ${line ? `<path d="${line}" class="hist-line"/>` : ""}
       ${dots}
     </svg>
-    <div class="hist-legend"><span>${escapeHtml(pts[0].ts.slice(0, 10))}</span><span>${max} ${escapeHtml(t("findingsUnit"))}</span><span>${escapeHtml(pts[pts.length - 1].ts.slice(0, 10))}</span></div>
+    <div class="hist-legend" dir="ltr"><span>${escapeHtml(pts[0].ts.slice(0, 10))}</span><span>${max} ${escapeHtml(t("findingsUnit"))}</span><span>${escapeHtml(pts[pts.length - 1].ts.slice(0, 10))}</span></div>
     <p class="hist-hint">${escapeHtml(t("histHint"))}</p>`;
 
   histBox.querySelectorAll(".hist-pt").forEach((el) => {
@@ -1197,7 +1307,14 @@ function renderHistory() {
     });
   });
 
-  if (histSelected >= 0 && histSelected < pts.length) renderHistDetail(histSelected);
+  if (histSelected >= 0 && histSelected < pts.length) {
+    renderHistDetail(histSelected);
+  } else {
+    // Deselect path: the detail card used to stay open showing a scan that
+    // was no longer selected, so the "×" close button visibly did nothing.
+    histDetail.hidden = true;
+    histDetail.innerHTML = "";
+  }
 }
 
 function selectHistPoint(idx) {
@@ -1309,24 +1426,39 @@ function _wireHelpToggle(btn, box) {
 _wireHelpToggle(nvdHelpBtn, nvdHelpBox);
 _wireHelpToggle(ollamaHelpBtn, ollamaHelpBox);
 
-function renderSettings() {
+// True while the user has touched a settings control but hasn't saved yet.
+// The 6s background poll must not overwrite what they're in the middle of
+// choosing — it used to snap the interval dropdown and both checkboxes back
+// to the stored values (and close the dropdown if it was open) mid-edit, so
+// people saved a setting they hadn't actually picked.
+let settingsDirty = false;
+[intervalSel, schedChk, startupChk].forEach((el) => {
+  el && el.addEventListener("change", () => { settingsDirty = true; });
+});
+
+function renderSettings({ force = false } = {}) {
   if (!lastAppCfg) return;
   const cfg = lastAppCfg.config;
-  const labels = { 3: "int3", 7: "int7", 14: "int14", 30: "int30" };
-  intervalSel.innerHTML = (cfg.allowed_intervals || [3, 7, 14, 30])
-    .map((d) => `<option value="${d}">${escapeHtml(t(labels[d] || "int7"))}</option>`)
-    .join("");
-  intervalSel.value = String(cfg.schedule_interval_days || 7);
-  schedChk.checked = !!cfg.schedule_enabled;
+  // Status text is always safe to refresh — it's read-only feedback, not
+  // something the user is editing.
   nvdKeyStatus.textContent = cfg.nvd_key_configured ? t("nvdKeyReady") : t("nvdKeyNotSet");
   nvdKeyStatus.className = "set-status " + (cfg.nvd_key_configured ? "ok" : "warn");
   // llm_available auto-updates as soon as Ollama comes up — no manual
   // "connect" step, the periodic poll below just reflects live reality.
   ollamaStatus.textContent = lastAppCfg.llm_available ? t("ollamaConnected") : t("ollamaNotConnected");
   ollamaStatus.className = "set-status " + (lastAppCfg.llm_available ? "ok" : "warn");
-  startupChk.checked = !!lastAppCfg.startup_enabled;
   const nr = lastAppCfg.schedule && lastAppCfg.schedule.next_run;
   nextRunLine.textContent = nr ? `${t("nextRun")}: ${nr.slice(0, 16).replace("T", " ")}` : "";
+
+  if (settingsDirty && !force) return;  // don't clobber in-progress edits
+
+  const labels = { 3: "int3", 7: "int7", 14: "int14", 30: "int30" };
+  intervalSel.innerHTML = (cfg.allowed_intervals || [3, 7, 14, 30])
+    .map((d) => `<option value="${d}">${escapeHtml(t(labels[d] || "int7"))}</option>`)
+    .join("");
+  intervalSel.value = String(cfg.schedule_interval_days || 7);
+  schedChk.checked = !!cfg.schedule_enabled;
+  startupChk.checked = !!lastAppCfg.startup_enabled;
 }
 
 async function fetchAppConfig() {
@@ -1343,20 +1475,46 @@ setInterval(fetchAppConfig, 6000);
 
 saveCfgBtn.addEventListener("click", async () => {
   setMsg.textContent = "";
-  const res = await postJSON("/api/config/save", {
-    schedule_interval_days: parseInt(intervalSel.value, 10),
-    schedule_enabled: schedChk.checked,
-  });
-  const data = await res.json();
-  lastAppCfg = { config: data.config, schedule: data.schedule };
-  renderSettings();
-  setMsg.textContent = t("saved");
+  saveCfgBtn.disabled = true;
+  try {
+    const res = await postJSON("/api/config/save", {
+      schedule_interval_days: parseInt(intervalSel.value, 10),
+      schedule_enabled: schedChk.checked,
+    });
+    if (!res.ok) throw new Error(`save ${res.status}`);
+    const data = await res.json();
+    // MERGE, don't replace: the save response carries only config+schedule,
+    // so assigning it wholesale dropped llm_available and startup_enabled.
+    // renderSettings then read them as undefined and visibly unchecked the
+    // startup box and flipped Ollama to "not connected" — with nothing
+    // having actually changed.
+    lastAppCfg = { ...lastAppCfg, config: data.config, schedule: data.schedule };
+    settingsDirty = false;
+    renderSettings({ force: true });
+    setMsg.textContent = t("saved");
+  } catch {
+    setMsg.textContent = t("genericSaveFail");
+  } finally {
+    saveCfgBtn.disabled = false;
+  }
 });
 
 runNowBtn.addEventListener("click", async () => {
-  if (!confirm(t("runNowBtn") + " ?")) return;
-  await postJSON("/api/schedule/run-now");
-  setMsg.textContent = t("started");
+  if (!confirm(t("confirmRunNow"))) return;
+  runNowBtn.disabled = true;
+  try {
+    const res = await postJSON("/api/schedule/run-now");
+    if (!res.ok) throw new Error(`run-now ${res.status}`);
+    setMsg.textContent = t("started");
+    // Start the live poll so the scan is actually visible: log, pipeline
+    // stages and report all update, instead of the app looking idle while
+    // a scan runs in the background.
+    beginScanPolling();
+  } catch {
+    setMsg.textContent = t("genericSaveFail");
+  } finally {
+    runNowBtn.disabled = false;
+  }
 });
 
 startupChk.addEventListener("change", async () => {
@@ -1368,11 +1526,16 @@ startupChk.addEventListener("change", async () => {
 
 notifyTestBtn.addEventListener("click", async () => {
   notifyTestBtn.disabled = true;
-  setMsg.textContent = t("llmThinking");
+  // was t("llmThinking") ("Analyzing…") — no LLM is involved in sending a
+  // test notification.
+  setMsg.textContent = t("notifySending");
   try {
     const res = await postJSON("/api/notify/test");
+    if (!res.ok) throw new Error(`notify ${res.status}`);
     const data = await res.json();
     setMsg.textContent = data.ok ? t("notifySent") : t("notifyFail");
+  } catch {
+    setMsg.textContent = t("notifyFail");
   } finally {
     notifyTestBtn.disabled = false;
   }
@@ -1400,8 +1563,9 @@ window.onLangChange = function () {
   document.querySelectorAll(".section-toggle").forEach(updateSectionToggleLabel);
   renderRunStatus();
   renderLog(lastStatus.log || []);
-  updateStagesFromLog(lastStatus.log || []);
   btnLabel.textContent = lastStatus.running ? t("running") : t("runScan");
+  if (deepLabel) deepLabel.textContent = lastStatus.running && lastStatus.deep
+    ? t("deepScanRunning") : t("deepScan");
   renderReport();
   renderUpgLog();
   renderUpdateRows();
@@ -1421,7 +1585,7 @@ window.onLangChange = function () {
 // --- init ----------------------------------------------------------------
 setLang(currentLang);
 setView("full");
-loadConfig();
+ensureCsrfToken();
 poll();
 fetchReport();
 fetchUpgradeStatus();

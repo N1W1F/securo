@@ -1,32 +1,44 @@
 /* ============================================================
-   THREAT INTEL — HTB CyberDefender theme
-   Dark purple + dark blood-red base, cyan/amber/green complements.
-   Angular cards, animated mesh backdrop, terminal data typography.
+   SECURO — deep-space theme
+   One palette shared by the CSS chrome, the starfield backdrop and the 3D
+   agent scene: near-black space base, violet/cyan nebula accents, glass
+   surfaces. Red is reserved for genuine danger semantics only — it used to
+   be the primary brand colour, which made a calm machine look like an
+   emergency at all times.
    Logical (RTL-safe) properties throughout.
    ============================================================ */
 :root{
-  --bg:#0a0612;
-  --bg-1:#0f0a1a;
-  --bg-2:#150d22;
-  --panel:#130b1f;
-  --border:#241536;
-  --border-strong:#3d2456;
-  --text:#ece7f5;
-  --muted:#9a90b3;
+  /* space base — matches body::before and the 3D scene clear colour so the
+     panels read as windows onto the same void, not stickers on top of it */
+  --bg:#04020a;
+  --bg-1:#080513;
+  --bg-2:#0c0819;
+  --panel:#0a0616;
+  --border:#1d1533;
+  --border-strong:#35265e;
+  --text:#e9e3f7;
+  --muted:#9c94b8;
 
   --violet:#a855f7;
   --violet-dim:#7c3aed;
   --violet-deep:#2a1250;
   --violet-soft:rgba(168,85,247,.12);
 
-  --blood:#c0121f;
-  --blood-dim:#7a0c14;
-  --blood-bright:#ff4d5e;
-  --blood-soft:rgba(192,18,31,.16);
+  /* danger scale — cooler crimson that belongs to this sky instead of the
+     old fire-engine red; still unmistakably "stop" */
+  --blood:#9e1436;
+  --blood-dim:#5e0a20;
+  --blood-bright:#ff5d78;
+  --blood-soft:rgba(158,20,54,.16);
 
   --cyan:#22d3ee;
   --amber:#f5a524;
   --green:#3ddc84;
+
+  /* glass surfaces: let the starfield show through the chrome */
+  --glass:rgba(12,8,25,.62);
+  --glass-strong:rgba(10,6,22,.78);
+  --glass-blur:blur(16px) saturate(1.15);
 
   --sev-crit:#ff4d5e;
   --sev-high:#f5a524;
@@ -60,29 +72,21 @@ body{
   font-size:14px;
 }
 
-/* animated mesh backdrop — slow, subtle, reduced-motion aware.
-   Layering (back to front): body::before solid+glow base, #scene3dBg (the
-   Three.js particle network), body::after faint grid on top. */
+/* deep-space backdrop — calm nebula glows, no red, no grid.
+   Layering (back to front): body::before nebula base, #scene3dBg (the
+   Three.js starfield) on top of it. */
 body::before{
   content:"";position:fixed;inset:-15%;z-index:-3;pointer-events:none;
   background:
-    radial-gradient(680px 520px at 15% 8%, rgba(168,85,247,.08), transparent 60%),
-    radial-gradient(620px 520px at 90% 6%, rgba(192,18,31,.07), transparent 55%),
-    radial-gradient(700px 560px at 45% 100%, rgba(124,58,237,.06), transparent 60%),
-    var(--bg);
+    radial-gradient(900px 620px at 78% -8%, rgba(124,58,237,.13), transparent 60%),
+    radial-gradient(760px 560px at 8% 30%, rgba(168,85,247,.07), transparent 60%),
+    radial-gradient(820px 600px at 55% 115%, rgba(34,211,238,.05), transparent 60%),
+    #04020a;
   animation:meshDrift 24s ease-in-out infinite alternate;
 }
 @keyframes meshDrift{to{transform:translate3d(-2%,2%,0) scale(1.05);}}
 #scene3dBg{position:fixed;inset:0;z-index:-2;width:100%;height:100%;pointer-events:none;}
-body::after{
-  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.35;
-  background-image:
-    linear-gradient(rgba(168,85,247,.035) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(168,85,247,.035) 1px,transparent 1px);
-  background-size:42px 42px;
-  -webkit-mask:radial-gradient(circle at 50% 20%, #000, transparent 78%);
-          mask:radial-gradient(circle at 50% 20%, #000, transparent 78%);
-}
+/* (grid overlay removed — clean space look, stars only) */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation:none !important;transition-duration:.01ms !important;}
 }
@@ -93,7 +97,8 @@ body::after{
 
 .sidebar{
   display:flex;flex-direction:column;align-items:center;
-  background:var(--bg-1);border-inline-end:1px solid var(--border);
+  background:var(--glass);border-inline-end:1px solid var(--border);
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
   padding:16px 8px;position:sticky;top:0;height:100vh;z-index:5;
 }
 .sidebar-brand{display:flex;flex-direction:column;align-items:center;gap:0;padding:4px 0 18px;}
@@ -127,7 +132,8 @@ body::after{
 
 .activity-rail{
   min-width:0;position:sticky;top:0;height:100vh;overflow-y:auto;
-  border-inline-start:1px solid var(--border);background:var(--bg-1);
+  border-inline-start:1px solid var(--border);background:var(--glass);
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
   padding:20px 18px;display:flex;flex-direction:column;gap:10px;
 }
 .activity-rail .log-box{flex:1;min-height:0;}
@@ -152,15 +158,31 @@ body::after{
 .topbar-title h1{margin:0;font-size:20px;font-weight:700;color:var(--text);}
 .topbar-title p{margin:5px 0 0;font-size:12.5px;color:var(--muted);max-width:600px;line-height:1.55;}
 
+.topbar-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .btn-primary{
   display:flex;align-items:center;gap:9px;white-space:nowrap;
-  background:linear-gradient(135deg,var(--blood),var(--blood-dim));color:#fff;
-  border:1px solid var(--blood-bright);border-radius:999px;
+  background:linear-gradient(135deg,var(--violet),var(--violet-dim));color:#fff;
+  border:1px solid rgba(196,150,255,.55);border-radius:999px;
   padding:11px 22px;font-size:13.5px;font-weight:700;cursor:pointer;
-  box-shadow:var(--inner-hi),0 6px 18px -8px rgba(192,18,31,.55);
+  box-shadow:var(--inner-hi),0 6px 20px -8px rgba(124,58,237,.65);
   transition:transform .4s var(--ease-spring),box-shadow .4s var(--ease-spring),filter .25s var(--ease-spring);
 }
-.btn-primary:hover{filter:brightness(1.1);box-shadow:var(--inner-hi),0 10px 30px -8px rgba(192,18,31,.7);transform:translateY(-1px);}
+.btn-primary:hover{filter:brightness(1.1);box-shadow:var(--inner-hi),0 10px 32px -8px rgba(168,85,247,.75);transform:translateY(-1px);}
+/* secondary action in the topbar — quiet until hovered, so the primary
+   scan button keeps visual priority */
+.btn-outline{
+  display:flex;align-items:center;gap:8px;white-space:nowrap;
+  background:var(--glass);color:var(--text);
+  border:1px solid var(--border-strong);border-radius:999px;
+  padding:10px 18px;font-size:12.5px;font-weight:600;cursor:pointer;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+  transition:transform .4s var(--ease-spring),border-color .3s,color .3s,box-shadow .4s var(--ease-spring);
+}
+.btn-outline:hover{border-color:var(--cyan);color:#fff;transform:translateY(-1px);
+  box-shadow:0 8px 26px -12px rgba(34,211,238,.5);}
+.btn-outline:active{transform:scale(.97);}
+.btn-outline:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none;}
+.btn-outline .spinner{border-color:rgba(255,255,255,.25);border-top-color:var(--cyan);}
 .btn-primary:active{transform:scale(.97);}
 .btn-primary:disabled{opacity:.5;cursor:not-allowed;filter:none;box-shadow:none;transform:none;}
 /* magnetic trailing icon — kinetic tension inside the pill on hover */
@@ -176,7 +198,8 @@ body::after{
 /* run status strip */
 .run-status{
   display:flex;align-items:center;gap:9px;margin-bottom:16px;padding:8px 14px;
-  border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-2);
+  border:1px solid var(--border);border-radius:999px;background:var(--glass);
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
   font-size:12px;color:var(--muted);animation:riseIn .35s .02s ease both;
 }
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto;}
@@ -189,7 +212,8 @@ body::after{
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;animation:riseIn .35s .04s ease both;perspective:1200px;}
 @media (max-width:820px){.kpi-row{grid-template-columns:repeat(2,1fr);}}
 .kpi-card{
-  position:relative;background:linear-gradient(180deg,var(--bg-2),var(--panel));
+  position:relative;background:var(--glass);
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
   border:1px solid var(--border);border-radius:var(--radius-xl);
   padding:18px 16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
   text-align:center;overflow:hidden;box-shadow:var(--inner-hi),var(--ambient);
@@ -217,7 +241,8 @@ body::after{
 /* KPI detail drawer — full width, double-bezel depth, cinematic reveal */
 .kpi-detail{
   margin-bottom:16px;border:1px solid var(--border-strong);border-radius:var(--radius-xl);
-  background:linear-gradient(180deg,var(--bg-2),var(--panel));padding:18px 20px;
+  background:var(--glass-strong);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+  padding:18px 20px;
   box-shadow:var(--inner-hi),var(--ambient),var(--ambient-violet);
   animation:kpiDrawer .5s var(--ease-out-soft) both;
 }
@@ -247,13 +272,19 @@ body::after{
 .gauge-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:20px;font-weight:700;}
 
 /* ---------- urgent banner ---------- */
+/* Glass over the starfield with a crimson edge, not a solid red slab: the
+   banner still reads as an alarm, but it no longer floods the whole page. */
 .urgent-banner{
-  display:flex;flex-direction:column;gap:10px;
-  background:linear-gradient(180deg,rgba(192,18,31,.20),var(--blood-soft));
-  border:1px solid var(--blood);border-radius:var(--radius-xl);
+  display:flex;flex-direction:column;gap:10px;position:relative;
+  background:linear-gradient(180deg,rgba(158,20,54,.16),var(--glass-strong));
+  border:1px solid rgba(255,93,120,.42);border-radius:var(--radius-xl);
   padding:16px 18px;margin-bottom:16px;animation:riseIn .45s var(--ease-out-soft) both;
-  box-shadow:var(--inner-hi),0 18px 50px -20px rgba(192,18,31,.55);
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+  box-shadow:var(--inner-hi),0 18px 50px -24px rgba(158,20,54,.5);
 }
+.urgent-banner::before{content:"";position:absolute;inset-block-start:0;inset-inline:0;height:2px;
+  border-start-start-radius:var(--radius-xl);border-start-end-radius:var(--radius-xl);
+  background:linear-gradient(90deg,var(--blood-bright),transparent);}
 .urgent-banner-head{display:flex;align-items:center;gap:9px;font-weight:700;font-size:13.5px;color:#ffd7dd;}
 .urgent-row{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
@@ -268,19 +299,41 @@ body::after{
 .u-snooze-menu{display:flex;gap:5px;flex-wrap:wrap;}
 .u-snooze-menu button{background:rgba(255,255,255,.08);color:var(--text);border:1px solid rgba(255,255,255,.2);border-radius:3px;padding:5px 9px;font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;}
 
-/* ---------- pipeline ---------- */
-.pipeline{display:flex;align-items:stretch;gap:10px;margin-bottom:18px;overflow-x:auto;animation:riseIn .35s .08s ease both;}
-.stage{flex:1;min-width:140px;text-align:center;padding:16px 10px;border:1px solid var(--border);border-radius:var(--radius-xl);background:linear-gradient(180deg,var(--bg-2),var(--panel));box-shadow:var(--inner-hi);transition:border-color .4s var(--ease-spring),transform .4s var(--ease-spring),box-shadow .4s var(--ease-spring);}
-.stage:hover{transform:translateY(-2px);box-shadow:var(--inner-hi),var(--ambient-violet);}
-.stage-icon{display:flex;justify-content:center;margin-bottom:6px;color:var(--muted);opacity:.9;}
-.stage[data-active="true"] .stage-icon,.stage[data-done="true"] .stage-icon{color:var(--violet);}
-.stage-name{font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text);}
-.stage-status{display:inline-block;font-size:10.5px;padding:2px 9px;border-radius:99px;border:1px solid var(--border);color:var(--muted);}
-.stage[data-active="true"]{border-color:var(--violet-dim);background:var(--violet-soft);}
-.stage[data-active="true"] .stage-name{color:var(--violet);}
-.stage[data-active="true"] .stage-status{background:var(--violet);color:#0a0612;border-color:var(--violet);}
-.stage[data-done="true"] .stage-status{color:var(--violet);border-color:var(--violet-dim);}
-.stage-arrow{display:flex;align-items:center;color:var(--muted);font-size:14px;flex:0 0 auto;}
+/* ---------- pipeline: live 3D agent orbit ---------- */
+.pipeline3d{
+  position:relative;height:380px;margin-bottom:18px;overflow:hidden;
+  border:1px solid var(--border);border-radius:var(--radius-xl);
+  /* transparent on purpose: the page's own starfield shows through, so the
+     panel is a window onto the same space rather than a second sky */
+  background:
+    radial-gradient(900px 500px at 75% -20%, rgba(124,58,237,.10), transparent 60%),
+    radial-gradient(700px 420px at 15% 120%, rgba(34,211,238,.05), transparent 55%);
+  box-shadow:var(--inner-hi),var(--ambient);
+  animation:riseIn .35s .08s ease both;
+}
+#p3d{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair;}
+.p3d-ov{position:absolute;inset:0;pointer-events:none;}
+.lbl{position:absolute;transform:translate(50%,0);text-align:center;transition:opacity .3s;pointer-events:none;}
+.lbl .nm{font-size:12.5px;font-weight:700;text-shadow:0 0 14px rgba(0,0,0,.9);}
+.lbl .st{font-size:10px;color:var(--muted);margin-top:2px;letter-spacing:.05em;}
+.lbl.on .st{color:var(--text);}
+.lbl.done .st{color:var(--green);}
+.p3d-card{
+  position:absolute;top:14px;inset-inline-start:14px;width:240px;padding:14px 16px;
+  background:rgba(16,11,28,.72);border:1px solid var(--border-strong);border-radius:var(--radius-xl);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 8px 32px rgba(0,0,0,.5);animation:riseIn .25s ease both;
+}
+.p3d-card h3{font-size:14.5px;margin-bottom:5px;}
+.p3d-card p{font-size:12px;line-height:1.7;color:var(--muted);margin-bottom:9px;}
+.p3d-card-row{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);}
+.p3d-card-row b{color:var(--text);}
+.p3d-card-x{position:absolute;top:7px;inset-inline-end:10px;background:none;border:none;color:var(--muted);font-size:17px;cursor:pointer;}
+.p3d-card-x:hover{color:var(--text);}
+.p3d-hint{
+  position:absolute;bottom:10px;inset-inline-start:14px;font-size:10.5px;color:var(--muted);
+  opacity:.7;pointer-events:none;
+}
 
 /* collapsible section toggle */
 .section-toggle-row{display:flex;justify-content:flex-end;margin-bottom:8px;}
@@ -302,7 +355,7 @@ body::after{
    report is the only child here and must span the whole content width. */
 .grid{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:14px;}
 
-.panel{border:1px solid var(--border);border-radius:var(--radius-xl);background:linear-gradient(180deg,var(--panel),var(--bg-1));display:flex;flex-direction:column;min-height:380px;max-height:65vh;position:relative;overflow:hidden;box-shadow:var(--inner-hi),var(--ambient);}
+.panel{border:1px solid var(--border);border-radius:var(--radius-xl);background:var(--glass);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);display:flex;flex-direction:column;min-height:380px;max-height:65vh;position:relative;overflow:hidden;box-shadow:var(--inner-hi),var(--ambient);}
 .panel::before{content:"";position:absolute;inset-block-start:0;inset-inline:0;height:2px;background:linear-gradient(90deg,var(--violet-dim),transparent 60%);}
 .panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid var(--border);}
 .panel-head h2{margin:0;font-size:13.5px;font-weight:700;color:var(--text);}
@@ -318,6 +371,9 @@ body::after{
 .report-box{padding:14px 16px;overflow-y:auto;flex:1;font-size:13px;line-height:1.85;unicode-bidi:plaintext;}
 .report-box li{unicode-bidi:plaintext;}
 .empty-hint{color:var(--muted);font-size:12.5px;}
+.upd-coverage{margin:12px 16px 4px;padding:10px 14px;font-size:11.5px;line-height:1.7;
+  color:var(--muted);background:var(--bg-1);border:1px solid var(--border);
+  border-radius:var(--radius-lg);}
 .report-box h1{font-size:15px;margin:0 0 10px;}
 .report-box h2{font-family:var(--font-mono);font-size:13px;margin:16px 0 8px;color:var(--violet);border-bottom:1px solid var(--border);padding-bottom:6px;}
 .report-box h3{font-size:12px;margin:12px 0 6px;color:var(--muted);text-transform:none;}

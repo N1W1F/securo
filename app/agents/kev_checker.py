@@ -44,23 +44,44 @@ def _fetch_kev_ids() -> set[str]:
         log(AGENT, f"fetched {len(ids)} known-exploited CVE ids from CISA KEV")
         return ids
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
-        log(AGENT, f"KEV fetch failed, treating as unknown: {e}")
-        return set()
+        # None, not set() — see get_kev_ids(). Returning an empty set here
+        # would read downstream as "CISA confirms nothing is exploited".
+        log(AGENT, f"KEV fetch failed, exploitation status unknown: {e}")
+        return None
 
 
 def get_kev_ids() -> set[str]:
+    """Returns the KEV id set, or None when the catalog could not be fetched.
+
+    None and empty-set mean very different things and must not be conflated:
+    an empty set is "CISA says nothing is exploited", None is "we don't
+    know". A failed fetch used to be cached as an empty set for the full
+    12h TTL, which made every finding non-exploited — so one offline moment
+    during a scan silently downgraded genuinely exploited CVEs out of the
+    urgent tier and suppressed the notification for half a day.
+    """
     now = time.time()
     if _cache["ids"] is not None and (now - _cache["fetched_at"]) < CACHE_TTL_SECS:
         return _cache["ids"]
     ids = _fetch_kev_ids()
+    if ids is None:
+        # Do NOT cache a failure. Keep any previous good data if we still
+        # have it; otherwise report "unknown" and retry on the next scan.
+        return _cache["ids"]
     _cache["ids"] = ids
     _cache["fetched_at"] = now
     return ids
 
 
 def annotate(findings: list[dict]) -> list[dict]:
-    """Adds an 'exploited' bool to each finding dict (mutates + returns)."""
+    """Adds an 'exploited' bool to each finding dict (mutates + returns).
+
+    Also sets 'kev_unknown' when the catalog was unreachable, so the UI can
+    say "couldn't verify" instead of implying a clean result.
+    """
     kev_ids = get_kev_ids()
+    unknown = kev_ids is None
     for f in findings:
-        f["exploited"] = f.get("id") in kev_ids if kev_ids else False
+        f["exploited"] = (f.get("id") in kev_ids) if kev_ids else False
+        f["kev_unknown"] = unknown
     return findings

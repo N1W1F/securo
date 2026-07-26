@@ -22,6 +22,7 @@ Security posture (mapped to OWASP Top 10:2021):
     - Request bodies are size-capped and Content-Length is parsed defensively.
 """
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -37,6 +38,7 @@ from agents import package_manager
 from agents import asset_auditor
 from agents import analyst
 from agents import kev_checker
+from agents import threat_hunter
 from agents import decision as decision_agent
 import history
 import appconfig
@@ -87,12 +89,30 @@ STATIC_FILES = {
     "/icons.js": "application/javascript; charset=utf-8",
     "/scene3d.js": "application/javascript; charset=utf-8",
     "/vendor/three.min.js": "application/javascript; charset=utf-8",
+    # ESM build + post-processing addons (bloom). Bare "three" specifiers in
+    # the addons were rewritten to relative paths so no <script type="importmap">
+    # is needed — an inline importmap would be blocked by our own CSP.
+    "/vendor/three/three.module.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/EffectComposer.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/RenderPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/ShaderPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/UnrealBloomPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/OutputPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/MaskPass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/postprocessing/Pass.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/shaders/CopyShader.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/shaders/LuminosityHighPassShader.js": "application/javascript; charset=utf-8",
+    "/vendor/three/addons/shaders/OutputShader.js": "application/javascript; charset=utf-8",
+    "/pipeline3d.js": "application/javascript; charset=utf-8",
+    "/mesh-lab.html": "text/html; charset=utf-8",
+    "/mesh-lab.css": "text/css; charset=utf-8",
     "/favicon.ico": "image/x-icon",
     "/icon.png": "image/png",
 }
 
 _state_lock = threading.Lock()
-_state = {"running": False, "done": False, "log": [], "exit_code": None, "started_at": None}
+_state = {"running": False, "done": False, "log": [], "exit_code": None,
+          "started_at": None, "deep": False}
 
 _decision_lock = threading.Lock()
 _decision_state = {"health_score": None, "items": []}
@@ -105,10 +125,18 @@ def _normalize_product_key(name: str) -> str:
     return _VERSION_TAIL_RE.sub("", name or "").strip().lower()
 
 
-def _has_available_update(product: str) -> bool:
-    """Best-effort cross-reference against the last winget update scan —
-    lets the decision tier reflect whether there's actually an update to
-    apply, instead of nagging about something with no fix available yet.
+def _has_available_update(product: str):
+    """True / False / None — None means "we haven't checked yet".
+
+    Cross-references the last winget update scan so the decision tier can
+    reflect whether a fix actually exists, instead of nagging about
+    something with no fix available yet.
+
+    The None case matters: the upgrade scan only runs when the user asks
+    for it, so on a freshly-started app `_upg_state["items"]` is empty.
+    Returning False there claimed "no update exists" for EVERY finding,
+    which demoted every CRITICAL out of the urgent tier and left the user
+    looking at an empty urgent banner that had nothing to do with reality.
 
     Word-boundary matching, not raw substring: plain `in` containment made
     "Git" match inside "GitHub Desktop" (and "Edge" inside "Microsoft Edge
@@ -118,7 +146,10 @@ def _has_available_update(product: str) -> bool:
     if not key:
         return False
     with _upg_lock:
+        scanned = _upg_state.get("phase") in ("scanned", "applied")
         items = list(_upg_state["items"])
+    if not scanned:
+        return None  # unknown, not "no update"
     for it in items:
         it_key = _normalize_product_key(it.get("Name", ""))
         if not it_key:
@@ -154,6 +185,15 @@ def _urgent_count_and_score() -> tuple[int, int | None]:
     """decision_provider callback for scheduler.py — recomputes fresh off the
     just-written report, then reports (urgent_count, health_score)."""
     _recompute_decision()
+    # clear_expired() first: active_snoozes() returns the raw file contents,
+    # including entries whose remind_at has already passed. Without this, a
+    # finding snoozed until *yesterday* still suppressed the urgent count,
+    # so the "you have urgent items" notification never fired for it.
+    # /api/decision already does this; the scheduler path did not.
+    try:
+        snooze.clear_expired()
+    except Exception:
+        pass
     with _decision_lock:
         snoozed = snooze.active_snoozes()
         urgent = [i for i in _decision_state["items"] if i["tier"] == "urgent" and i["id"] not in snoozed]
@@ -161,10 +201,21 @@ def _urgent_count_and_score() -> tuple[int, int | None]:
 
 
 _upg_lock = threading.Lock()
-_upg_state = {"running": False, "phase": None, "items": [], "log": [], "results": [], "progress": None}
+_upg_state = {"running": False, "phase": None, "items": [], "log": [], "results": [], "progress": None,
+              "coverage": {"total": 0, "tracked": 0, "untracked": 0}}
 
 
-def _try_start_orchestrator() -> bool:
+def _spawn(target) -> None:
+    """Single place worker threads are created. Exists so tests can verify
+    the atomic-claim logic by injecting a recorder here — patching
+    `threading.Thread` instead would rebind it PROCESS-WIDE (server.threading
+    *is* the stdlib module), and ThreadingHTTPServer builds a Thread per
+    incoming connection, so the security-test route would hang the very
+    server running it."""
+    threading.Thread(target=target, daemon=True).start()
+
+
+def _try_start_orchestrator(spawn=None, deep: bool = False) -> bool:
     """Atomically claim the 'scan running' flag and start the pipeline
     thread. Returns False if a scan is already running (the claim failed),
     so two near-simultaneous triggers can never spawn two subprocesses that
@@ -177,51 +228,98 @@ def _try_start_orchestrator() -> bool:
         _state["log"] = []
         _state["exit_code"] = None
         _state["started_at"] = time.time()
-    threading.Thread(target=_run_orchestrator, daemon=True).start()
+        _state["deep"] = bool(deep)
+    (spawn or _spawn)(lambda: _run_orchestrator(deep=deep))
     return True
 
 
-def _run_orchestrator():
+def _run_orchestrator(deep: bool = False):
     # state was claimed + initialized by _try_start_orchestrator() under the
     # lock before this thread started — do NOT re-init here.
-    proc = subprocess.Popen(
-        _SCAN_CMD,
-        cwd=str(APP_DIR),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    for line in proc.stdout:
+    #
+    # The whole body is wrapped: if anything here raises (Popen hitting
+    # PermissionError/WinError 740 on a locked-down install, an unwritable
+    # audit log), this daemon thread dies silently — stderr is swallowed
+    # under pythonw — and `running` stays True forever, so every later scan
+    # answers "already running" until the app is restarted.
+    exit_code = None
+    try:
+        # Copy the parent environment rather than replacing it: the scan needs
+        # PATH (winget), SystemRoot, etc. Only the deep-scan switch is added.
+        env = dict(os.environ)
+        env[threat_hunter.DEEP_SCAN_ENV] = "1" if deep else "0"
+        proc = subprocess.Popen(
+            _SCAN_CMD,
+            cwd=str(APP_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        for line in proc.stdout:
+            with _state_lock:
+                _state["log"].append(line.rstrip("\n"))
+        proc.wait()
+        exit_code = proc.returncode
+
+        try:
+            history.record_current_report()  # feed the risk-history chart + diff
+        except Exception:
+            pass
+        try:
+            _recompute_decision()
+        except Exception:
+            pass
+    except Exception as exc:
+        exit_code = -1
         with _state_lock:
-            _state["log"].append(line.rstrip("\n"))
-    proc.wait()
+            _state["log"].append(f"[ERROR] scan failed to run: {type(exc).__name__}: {exc}")
+    finally:
+        with _state_lock:
+            _state["running"] = False
+            _state["done"] = True
+            _state["exit_code"] = exit_code
 
-    try:
-        history.record_current_report()  # feed the risk-history chart + diff
-    except Exception:
-        pass
-    try:
-        _recompute_decision()
-    except Exception:
-        pass
 
-    with _state_lock:
-        _state["running"] = False
-        _state["done"] = True
-        _state["exit_code"] = proc.returncode
+def _try_claim_upgrade(phase: str) -> bool:
+    """Atomically claim the upgrade-worker slot, same pattern as
+    _try_start_orchestrator. Previously the caller read `running` under the
+    lock, released it, and only set the flag once the worker thread began —
+    so a double-click (well inside the rate limit) started two winget
+    processes, and the second one's state reset wiped the first one's
+    results mid-run."""
+    with _upg_lock:
+        if _upg_state["running"]:
+            return False
+        _upg_state.update(running=True, phase=phase, results=[], log=[f"{phase}:start"])
+        return True
+
+
+def _release_upgrade(phase: str) -> None:
+    with _upg_lock:
+        _upg_state["running"] = False
+        _upg_state["phase"] = phase
 
 
 def _run_scan():
-    with _upg_lock:
-        _upg_state.update(running=True, phase="scanning", results=[], log=["scan:start"])
-    items = package_manager.scan_upgradable()
-    items = [it for it in items if not update_ignore.is_ignored(it.get("Id", ""), it.get("Available", ""))]
-    with _upg_lock:
-        _upg_state["items"] = items
-        _upg_state["running"] = False
-        _upg_state["phase"] = "scanned"
-        _upg_state["log"].append(f"scan:done:{len(items)}")
+    # try/finally: without it any exception in here (a winget PermissionError,
+    # an unwritable audit log) killed this daemon thread silently and left
+    # running=True forever — every later scan/apply answered "already
+    # running" until the app was restarted.
+    try:
+        items = package_manager.scan_upgradable()
+        items = [it for it in items if not update_ignore.is_ignored(it.get("Id", ""), it.get("Available", ""))]
+        cov = package_manager.coverage()
+        with _upg_lock:
+            _upg_state["items"] = items
+            _upg_state["coverage"] = cov
+            _upg_state["log"].append(f"scan:done:{len(items)}")
+    except Exception as exc:
+        with _upg_lock:
+            _upg_state["log"].append(f"scan:failed:{type(exc).__name__}")
+    finally:
+        _release_upgrade("scanned")
 
 
 _PCT_RE = re.compile(r"(\d{1,3})\s*%")
@@ -280,10 +378,33 @@ def _set_progress(**kw):
 
 
 def _run_apply(ids: list[str]):
+    # The claim (running=True) is made by the ROUTE via _try_claim_upgrade
+    # before this thread is spawned — doing it here left a window where two
+    # rapid clicks both passed the check and ran winget twice.
     with _upg_lock:
-        _upg_state.update(running=True, phase="applying", results=[],
-                          log=[f"apply:start:{len(ids)}"], progress=None)
+        _upg_state["log"].append(f"apply:start:{len(ids)}")
+        _upg_state["progress"] = None
+    try:
+        _apply_all(ids)
+    except Exception as exc:
+        with _upg_lock:
+            _upg_state["log"].append(f"apply:failed:{type(exc).__name__}")
+    finally:
+        with _upg_lock:
+            _upg_state["running"] = False
+            _upg_state["phase"] = "applied"
+            _upg_state["progress"] = None
+            any_ok = any(r.get("ok") for r in _upg_state["results"])
+        if any_ok:
+            # a package version just changed under us — the urgent list still
+            # reflects CVEs matched against the OLD version until a fresh full
+            # scan runs. Auto-trigger one (atomic claim; no-op if one is
+            # already running) so "already updated" software stops showing as
+            # still-urgent without the user manually re-scanning.
+            _try_start_orchestrator()
 
+
+def _apply_all(ids: list[str]):
     for pkg_id in ids:
         with _upg_lock:
             _upg_state["log"].append(f"apply:running:{pkg_id}")
@@ -337,20 +458,6 @@ def _run_apply(ids: list[str]):
         with _upg_lock:
             _upg_state["results"].append(result)
             _upg_state["log"].append(f"apply:{'ok' if result['ok'] else 'fail'}:{pkg_id}:{result['message']}")
-
-    with _upg_lock:
-        _upg_state["running"] = False
-        _upg_state["phase"] = "applied"
-        _upg_state["progress"] = None
-        any_ok = any(r.get("ok") for r in _upg_state["results"])
-
-    if any_ok:
-        # a package version just changed under us — the urgent list still
-        # reflects CVEs matched against the OLD version until a fresh full
-        # scan runs. Auto-trigger one (atomic claim; no-op if one is
-        # already running) so "already updated" software stops showing as
-        # still-urgent without the user manually re-scanning.
-        _try_start_orchestrator()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -440,8 +547,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"content": None})
         elif self.path == "/api/upgrades/status":
+            # Copy under the lock, serialize + write OUTSIDE it. Doing the
+            # json.dumps and socket write inside the critical section let a
+            # slow-reading client block the apply-progress thread (which
+            # takes this lock every 0.4s) and decision recomputation.
             with _upg_lock:
-                self._json(dict(_upg_state))
+                snapshot = {k: (list(v) if isinstance(v, list) else v)
+                            for k, v in _upg_state.items()}
+            self._json(snapshot)
         elif self.path == "/api/history":
             self._json({"series": history.series()})
         elif self.path == "/api/diff":
@@ -475,16 +588,29 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             self.send_error(421, "Misdirected Request")
             return
-        if not _rate_limit_ok(self.client_address[0]):
-            self._json({"status": "rate_limited"}, 429)
-            return
+        # CSRF is checked BEFORE the rate limiter on purpose. The bucket is
+        # keyed on 127.0.0.1 — the only client there can be — so if unproven
+        # requests consumed it, any web page in the browser could fire simple
+        # cross-origin POSTs (blocked by CSRF, but still counted) and starve
+        # the real dashboard of its own quota: no scans, no updates, no
+        # settings saves, for as long as that tab stayed open. Rejected
+        # requests must not spend the legitimate UI's budget.
         if not self._csrf_ok():
             self._json({"status": "forbidden"}, 403)
             return
+        if not _rate_limit_ok(self.client_address[0]):
+            self._json({"status": "rate_limited"}, 429)
+            return
 
         if self.path == "/api/run":
-            if _try_start_orchestrator():
-                self._json({"status": "started"})
+            raw = self._read_body()
+            try:
+                body = json.loads(raw or b"{}") if raw is not None else {}
+            except json.JSONDecodeError:
+                body = {}
+            deep = bool(body.get("deep")) if isinstance(body, dict) else False
+            if _try_start_orchestrator(deep=deep):
+                self._json({"status": "started", "deep": deep})
             else:
                 self._json({"status": "already_running"})
 
@@ -596,12 +722,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(package_manager.get_details(pkg_id))
 
         elif self.path == "/api/upgrades/scan":
-            with _upg_lock:
-                already = _upg_state["running"]
-            if already:
+            # Atomic claim: the flag is taken here, under the lock, BEFORE
+            # the worker is spawned. Checking then spawning left a gap two
+            # quick clicks both slipped through.
+            if not _try_claim_upgrade("scanning"):
                 self._json({"status": "already_running"})
                 return
-            threading.Thread(target=_run_scan, daemon=True).start()
+            _spawn(_run_scan)
             self._json({"status": "started"})
 
         elif self.path == "/api/upgrades/apply":
@@ -619,16 +746,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"status": "bad_request"}, 400)
                 return
             with _upg_lock:
-                already = _upg_state["running"]
                 known_ids = {it["Id"] for it in _upg_state["items"]}
-            if already:
-                self._json({"status": "already_running"})
-                return
             requested = [i for i in ids if i in known_ids]
             if not requested:
                 self._json({"status": "no_valid_ids"}, 400)
                 return
-            threading.Thread(target=_run_apply, args=(requested,), daemon=True).start()
+            # Claim after validating ids, so a bad request doesn't take the
+            # slot — but before spawning, so two clicks can't both win.
+            if not _try_claim_upgrade("applying"):
+                self._json({"status": "already_running"})
+                return
+            _spawn(lambda: _run_apply(requested))
             self._json({"status": "started", "count": len(requested)})
 
         elif self.path == "/api/upgrades/ignore":
