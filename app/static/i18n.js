@@ -94,17 +94,17 @@ const I18N = {
     kpiCritical: "ثغرات حرجة وعالية",
     kpiAssets: "أصول مفحوصة",
     kdHealthLead: "رقم من 0 إلى 100 يلخّص وضع جهازك. يبدأ من 100 ويُخصم منه حسب خطورة الثغرات القابلة للإصلاح فعلياً — ليس كل ثغرة، بل التي لها تحديث متاح ولم تُصلَّح بعد.",
-    kdHealthGood: "جيد", kdHealthMid: "يحتاج انتباه", kdHealthPoor: "ضعيف",
-    kdBandGood: "75–100 · جيد", kdBandMid: "45–74 · يحتاج انتباه", kdBandPoor: "0–44 · ضعيف",
+    kdHealthGood: "جيد", kdHealthMid: "يتطلب متابعة", kdHealthPoor: "ضعيف",
+    kdBandGood: "75–100 · جيد", kdBandMid: "45–74 · يتطلب متابعة", kdBandPoor: "0–44 · ضعيف",
     kdHealthNote: "<strong>كيف يُحسب:</strong> كل درجة خطورة تخصم نقاطاً (حرجة أكثر من عالية…) لكن بسقف لكل فئة، فلا يتصفّر الرقم بسبب كثرة نتائج مطابقة النص. الثغرات المُصلحة بالفعل (نسختك أحدث من نسخة الإصلاح) والقديمة جداً لا تُحتسب.",
-    kdFindingsLead: "إجمالي تطابقات CVE من بحث NVD بالاسم عبر كل برامجك. مطابقة الاسم واسعة عمداً — تشمل نتائج زائدة (نفس اسم منتج مختلف، إصدارات قديمة) لذا لا تفزع من الرقم الكبير.",
+    kdFindingsLead: "إجمالي تطابقات CVE من بحث NVD بالاسم عبر كل برامجك. مطابقة الاسم واسعة عمداً — تشمل نتائج زائدة (نفس اسم منتج مختلف، إصدارات قديمة) لذا فإن ارتفاع هذا الرقم متوقع ولا يعني بالضرورة وجود خطر.",
     kdFindingsNote: "<strong>مهم:</strong> هذا رقم خام لكل التطابقات. القائمة العاجلة (البانر الأحمر) هي المُصفّاة الفعلية التي تحتاج قرارك.",
     kdCriticalLead: "من التطابقات الخام بدرجة حرجة/عالية. لكن «حرجة» لا تعني «عاجلة» تلقائياً — يجب أن يتوفر لها تحديث وأن يكون استغلالها واقعياً على جهازك.",
-    kdActionable: "عاجلة فعلاً (لها تحديث)",
+    kdActionable: "عاجلة — يتوفر تحديث",
     kdNoUpdate: "لا تحديث متاح حالياً",
     kdHardExploit: "استغلالها صعب (محلي/معقّد)",
     kdFixedReview: "مُصلحة/تحتاج مراجعة",
-    kdCriticalNote: "<strong>لهذا ترى ثغرات حرجة بلا تحديثات:</strong> كثير منها قديم ومُصلَّح بنسختك الحالية، أو بلا تحديث صادر بعد، أو يحتاج وصولاً محلياً للجهاز. فقط «عاجلة فعلاً» تستحق إجراءً الآن.",
+    kdCriticalNote: "<strong>يُفسّر ذلك ظهور ثغرات حرجة دون تحديثات متاحة:</strong> كثير منها قديم ومُصلَّح بنسختك الحالية، أو بلا تحديث صادر بعد، أو يحتاج وصولاً محلياً للجهاز. فقط «عاجلة فعلاً» تستحق إجراءً الآن.",
     kdAssetsLead: "عدد البرامج التي طابقت ثغرة واحدة على الأقل، مقابل ما فُحص وما استُثني.",
     kdWithFindings: "برامج بها تطابقات",
     kdScannedClean: "بلا تطابقات",
@@ -163,17 +163,17 @@ const I18N = {
     helpBtnAria: "عرض التعليمات",
     nvdHelpSteps:
       "<li>افتح صفحة طلب المفتاح من nvd.nist.gov (الزر بالأسفل).</li>" +
-      "<li>عبّئ اسمك وبريدك الإلكتروني واضغط إرسال — بلا اشتراك أو دفع.</li>" +
-      "<li>تفقّد بريدك (وصندوق الإزعاج) — المفتاح يوصل خلال دقائق.</li>" +
-      "<li>الصق المفتاح بالحقل تحت واضغط حفظ.</li>",
+      "<li>عبّئ اسمك وبريدك الإلكتروني واضغط إرسال — دون تسجيل أو رسوم.</li>" +
+      "<li>تفقّد بريدك (وصندوق الإزعاج) — يصلك المفتاح خلال دقائق.</li>" +
+      "<li>الصق المفتاح في الحقل أدناه واضغط حفظ.</li>",
     nvdHelpLink: "افتح صفحة طلب المفتاح ↗",
     ollamaTitle: "الذكاء الاصطناعي المحلي (Ollama) — اختياري",
     ollamaHelpSteps:
-      "<li>نزّل Ollama لويندوز من الرابط بالأسفل وثبّته (تثبيت عادي بلا إعدادات).</li>" +
-      "<li>افتح \"موجّه الأوامر\" (Command Prompt) واكتب: <code>ollama pull llama3.2</code> — نموذج خفيف موصى به (~2GB).</li>" +
-      "<li>انتظر التحميل يخلص (يظهر شريط تقدّم بالطرفية).</li>" +
-      "<li>خلاص — ما تحتاج تربط شي هنا. البرنامج يكتشف Ollama تلقائياً بمجرد ما يصير شغّال، ويحدّث الحالة تحت بنفسه.</li>",
-    ollamaHelpLink: "تحميل Ollama لويندوز ↗",
+      "<li>حمّل Ollama لنظام ويندوز من الرابط أدناه وثبّته (تثبيت قياسي دون إعدادات إضافية).</li>" +
+      "<li>افتح \"موجّه الأوامر\" (Command Prompt) ونفّذ: <code>ollama pull llama3.2</code> — نموذج خفيف موصى به (~2GB).</li>" +
+      "<li>انتظر اكتمال التنزيل (يظهر شريط تقدّم في الطرفية).</li>" +
+      "<li>بذلك يكتمل الإعداد؛ لا يلزم أي ربط يدوي. يكتشف التطبيق خدمة Ollama تلقائياً بمجرد تشغيلها ويحدّث الحالة أدناه.</li>",
+    ollamaHelpLink: "تحميل Ollama لنظام ويندوز ↗",
     ollamaHint: "يلزم فقط لميزات اشرح/اسأل/إعادة التقييم. يعمل محلياً بلا إنترنت بعد التثبيت — يتصل تلقائياً بمجرد تشغيله، بلا أي إعداد إضافي هنا.",
     ollamaConnected: "متصل ✅",
     ollamaNotConnected: "غير متصل — يلزم تشغيل خدمة Ollama (راجع التعليمات)",
@@ -242,7 +242,7 @@ const I18N = {
     ignoreUpdate: "Ignore",
     ignoreUpdateHint: "Hide this update from the list (reappears if a newer version is released)",
     confirmOne: (id) => `Update "${id}" now via winget?`,
-    confirmAll: (n) => `${n} program(s) will be updated automatically via winget. Continue?`,
+    confirmAll: (n) => `${n} programs will be updated automatically via winget. Continue?`,
     sizeLabel: "Size",
     sizeUnknown: "unknown",
     fetchingSize: "fetching size…",
@@ -296,7 +296,7 @@ const I18N = {
     kdFindingsLead: "Total CVE matches from NVD keyword search across all your software. Name matching is deliberately broad — it over-matches (same product name, old versions), so a large number here is expected, not alarming.",
     kdFindingsNote: "<strong>Important:</strong> this is a raw match count. The urgent list (red banner) is the actual filtered set that needs your decision.",
     kdCriticalLead: "The raw matches at critical/high severity. But \"critical\" doesn't automatically mean \"urgent\" — an update has to exist and exploitation has to be realistic on your machine.",
-    kdActionable: "Actually urgent (has update)",
+    kdActionable: "Urgent — update available",
     kdNoUpdate: "No update available yet",
     kdHardExploit: "Hard to exploit (local/complex)",
     kdFixedReview: "Fixed / needs review",

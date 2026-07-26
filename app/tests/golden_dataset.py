@@ -492,21 +492,42 @@ def decision_output_is_advisory_only():
 def kev_host_lock():
     return urllib.parse.urlparse(kev_checker.KEV_HOST).netloc == "www.cisa.gov", kev_checker.KEV_HOST
 
-@test("KEV Egress Lock", "فشل الجلب يُرجع مجموعة فارغة بدل الانهيار", "لا استثناء غير مُدار",
-      "التقاط أخطاء الشبكة/الفك صراحة", "Baseline / Resilience")
-def kev_fetch_failure_degrades_gracefully():
+@test("KEV Egress Lock", "فشل الجلب يُرجع «غير معروف» لا «لا شيء مُستغَل»",
+      "get_kev_ids ترجع None عند الفشل بدل مجموعة فارغة",
+      "التمييز بين انعدام المعرفة وتأكيد السلامة", "Baseline / Fail-Safe")
+def kev_fetch_failure_is_unknown_not_clean():
+    # An empty set means "CISA confirms nothing is exploited"; a failed
+    # fetch must NOT produce that. It previously did — and was cached for
+    # 12h — so one offline moment silently downgraded genuinely exploited
+    # CVEs out of the urgent tier and muted the notification.
     orig_host = kev_checker.KEV_HOST
     kev_checker.KEV_HOST = "https://www.cisa.gov/this-path-does-not-exist-probe-404"
     kev_checker._cache["ids"] = None
     try:
         ids = kev_checker.get_kev_ids()
-        ok = isinstance(ids, set)
+        ok = ids is None                      # unknown, not "clean"
+        cached = kev_checker._cache["ids"] is None  # failure must not be cached
     except Exception:
-        ok = False
+        ok, cached = False, False
     finally:
         kev_checker.KEV_HOST = orig_host
         kev_checker._cache["ids"] = None
-    return ok, ""
+    return ok and cached, f"returned={ids!r} cached_failure={not cached}"
+
+@test("KEV Egress Lock", "تعذّر التحقق من الاستغلال يُوسَم صراحةً على كل نتيجة",
+      "annotate تضع kev_unknown=True ولا تدّعي عدم الاستغلال",
+      "kev_checker.annotate", "Baseline / Fail-Safe")
+def kev_unknown_is_flagged_on_findings():
+    orig_host = kev_checker.KEV_HOST
+    kev_checker.KEV_HOST = "https://www.cisa.gov/this-path-does-not-exist-probe-404"
+    kev_checker._cache["ids"] = None
+    try:
+        out = kev_checker.annotate([{"id": "CVE-2021-44228"}])
+        ok = out[0].get("kev_unknown") is True and out[0].get("exploited") is False
+    finally:
+        kev_checker.KEV_HOST = orig_host
+        kev_checker._cache["ids"] = None
+    return ok, str(out)
 
 
 # ============================================================
