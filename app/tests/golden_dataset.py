@@ -1313,5 +1313,60 @@ def upd_recovery_ignores_unknown_installed_version():
     return out == [] and not called, f"out={out} searched={called}"
 
 
+
+# ============================================================
+# 28. URGENT / UPDATES CONSISTENCY — the urgent banner and the updates tab
+#     are two views of the same decision. They disagreed: on a fresh start
+#     the upgrade scan had never run, so every finding carried
+#     has_update=None, the decision agent failed toward showing risk (right
+#     call), and the user was told 7 CRITICALs were urgent while the updates
+#     tab was empty. The scan pipeline now resolves update availability
+#     before tiers are decided.
+# ============================================================
+
+@test("Urgent Consistency", "الفحص يحسم توفّر التحديث قبل تصنيف الأولويات",
+      "_run_orchestrator يستدعي فحص التحديثات قبل إعادة حساب القرار",
+      "server._scan_updates_inline قبل _recompute_decision", "Baseline / Consistency")
+def urgent_pipeline_resolves_updates_before_deciding():
+    import inspect
+    src = inspect.getsource(srv._run_orchestrator)
+    return ("_scan_updates_inline" in src
+            and src.index("_scan_updates_inline") < src.index("_recompute_decision")),            "update check must precede tier decision"
+
+
+@test("Urgent Consistency", "بند عاجل بحالة (تحديث متاح) يقابله صف فعلي بقائمة التحديثات",
+      "لا يظهر بند عاجل يدّعي توفّر تحديث بلا ما يقابله",
+      "_has_available_update يقرأ نفس _upg_state المعروض بالواجهة", "Consistency / UX Integrity")
+def urgent_claiming_update_has_a_matching_row():
+    with srv._upg_lock:
+        saved = dict(srv._upg_state)
+        srv._upg_state["phase"] = "scanned"
+        srv._upg_state["items"] = [{"Id": "Telegram.TelegramDesktop",
+                                    "Name": "Telegram Desktop", "Available": "7.0.5"}]
+    try:
+        hit  = srv._has_available_update("Telegram Desktop 7.0.2")
+        miss = srv._has_available_update("Some Unrelated Program 1.0")
+    finally:
+        with srv._upg_lock:
+            srv._upg_state.clear(); srv._upg_state.update(saved)
+    return (hit is True and miss is False), f"hit={hit!r} miss={miss!r}"
+
+
+@test("Urgent Consistency", "قبل أي فحص تحديثات تبقى الحالة (غير معروف) لا (لا يوجد تحديث)",
+      "_has_available_update ترجع None وليس False",
+      "tri-state fail-safe: unknown != no-update", "Fail-Safe / Data Integrity")
+def urgent_unknown_state_is_not_no_update():
+    with srv._upg_lock:
+        saved = dict(srv._upg_state)
+        srv._upg_state["phase"] = None
+        srv._upg_state["items"] = []
+    try:
+        val = srv._has_available_update("Anything 1.0")
+    finally:
+        with srv._upg_lock:
+            srv._upg_state.clear(); srv._upg_state.update(saved)
+    return val is None, f"got {val!r}, expected None"
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

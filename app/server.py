@@ -156,6 +156,37 @@ def _has_available_update(product: str):
     return False
 
 
+
+# --- agent activity ---------------------------------------------------------
+# Only four agents run inside the scan subprocess and therefore appear in the
+# scan log: Orchestrator, Asset Auditor, Threat Hunter, Remediation. The other
+# four (Package Manager, KEV Checker, Decision, Analyst) run in THIS process,
+# so the dashboard had no way to know they had ever done anything and the
+# architecture diagram showed half the system as permanently idle.
+# This records a short-lived "busy" mark around their real work.
+_agent_lock = threading.Lock()
+_agent_activity: dict[str, float] = {}
+AGENT_BUSY_SECS = 2.0   # how long an agent reads as active after finishing
+
+
+def _mark_agent(name: str) -> None:
+    with _agent_lock:
+        _agent_activity[name] = time.time()
+
+
+def _active_agents() -> list[str]:
+    now = time.time()
+    with _agent_lock:
+        return [n for n, t in _agent_activity.items() if now - t < AGENT_BUSY_SECS]
+
+
+class _agent_span:
+    """Marks an agent busy for the duration of a block."""
+    def __init__(self, name): self.name = name
+    def __enter__(self): _mark_agent(self.name); return self
+    def __exit__(self, *exc): _mark_agent(self.name); return False
+
+
 def _recompute_decision():
     """Run KEV Checker + Decision Agent over the latest findings. Reads the
     structured JSON sidecar (not the markdown report — that's for humans;
@@ -171,8 +202,10 @@ def _recompute_decision():
     findings = data.get("findings", [])
     for f in findings:
         f["has_update"] = _has_available_update(f.get("product", ""))
-    kev_checker.annotate(findings)
-    result = decision_agent.decide(findings)
+    with _agent_span("KEV Checker"):
+        kev_checker.annotate(findings)
+    with _agent_span("Decision"):
+        result = decision_agent.decide(findings)
     with _decision_lock:
         _decision_state["health_score"] = result["health_score"]
         _decision_state["items"] = result["items"]
@@ -199,7 +232,8 @@ def _urgent_count_and_score() -> tuple[int, int | None]:
 
 _upg_lock = threading.Lock()
 _upg_state = {"running": False, "phase": None, "items": [], "log": [], "results": [], "progress": None,
-              "coverage": {"total": 0, "tracked": 0, "untracked": 0, "recovered": 0}}
+              "coverage": {"total": 0, "tracked": 0, "untracked": 0, "recovered": 0},
+              "buckets": {}}
 
 
 def _spawn(target) -> None:
@@ -260,6 +294,25 @@ def _run_orchestrator(deep: bool = False):
         proc.wait()
         exit_code = proc.returncode
 
+        # Resolve update availability BEFORE deciding tiers.
+        #
+        # `has_update` is tri-state and the upgrade scan used to run only when
+        # the user asked for it, so straight after a security scan every
+        # finding was None = "not checked". The decision agent fails toward
+        # showing risk, so every CRITICAL landed in the urgent banner with the
+        # reason "update availability not checked yet" — while the updates tab
+        # was still empty, because nothing had scanned it. The user was told
+        # seven things were urgent and then shown nothing to act on.
+        #
+        # The upgrade scan costs ~4s, so there is no reason to defer it.
+        # Running it here means tiers are computed from real data.
+        try:
+            _scan_updates_inline()
+        except Exception as exc:
+            with _state_lock:
+                _state["log"].append(
+                    f"[INFO] update availability check skipped: {type(exc).__name__}")
+
         try:
             history.record_current_report()  # feed the risk-history chart + diff
         except Exception:
@@ -299,19 +352,36 @@ def _release_upgrade(phase: str) -> None:
         _upg_state["phase"] = phase
 
 
+def _scan_updates_inline() -> None:
+    """Run the winget upgrade scan synchronously on the caller's thread.
+
+    Used by the orchestrator so update availability is known before tiers are
+    decided. Claims the same lock as the user-triggered scan; if the user
+    happens to have one running already, we leave it alone — its result lands
+    in the same shared state either way.
+    """
+    if not _try_claim_upgrade("scan"):
+        return
+    _run_scan()
+
+
 def _run_scan():
     # try/finally: without it any exception in here (a winget PermissionError,
     # an unwritable audit log) killed this daemon thread silently and left
     # running=True forever — every later scan/apply answered "already
     # running" until the app was restarted.
     try:
+        _mark_agent("Package Manager")
         items = package_manager.scan_upgradable()
         items = [it for it in items if not update_ignore.is_ignored(it.get("Id", ""), it.get("Available", ""))]
         cov = package_manager.coverage()
+        bkt = package_manager.buckets()
         with _upg_lock:
             _upg_state["items"] = items
             _upg_state["coverage"] = cov
+            _upg_state["buckets"] = bkt
             _upg_state["log"].append(f"scan:done:{len(items)}")
+        _mark_agent("Package Manager")
     except Exception as exc:
         with _upg_lock:
             _upg_state["log"].append(f"scan:failed:{type(exc).__name__}")
@@ -536,6 +606,8 @@ class Handler(BaseHTTPRequestHandler):
             state["inventory"] = asset_auditor.inventory_status()
             state["elapsed_secs"] = round(time.time() - state["started_at"]) if state.get("running") and state.get("started_at") else 0
             self._json(state)
+        elif self.path == "/api/agents":
+            self._json({"active": _active_agents()})
         elif self.path == "/api/inventory":
             self._json(asset_auditor.inventory_status())
         elif self.path == "/api/report":
@@ -629,16 +701,17 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 self._json({"status": "bad_request"}, 400)
                 return
-            if self.path == "/api/ai/explain":
-                self._json(analyst.explain(str(body.get("id", ""))[:60],
-                                           str(body.get("severity", ""))[:20],
-                                           str(body.get("desc", ""))[:2000]))
-            elif self.path == "/api/ai/answer":
-                report = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.is_file() else ""
-                self._json(analyst.answer(str(body.get("question", "")), report))
-            else:  # reassess
-                text = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.is_file() else ""
-                self._json(analyst.reassess(history.parse_findings(text)))
+            with _agent_span("Analyst"):
+                if self.path == "/api/ai/explain":
+                    self._json(analyst.explain(str(body.get("id", ""))[:60],
+                                               str(body.get("severity", ""))[:20],
+                                               str(body.get("desc", ""))[:2000]))
+                elif self.path == "/api/ai/answer":
+                    report = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.is_file() else ""
+                    self._json(analyst.answer(str(body.get("question", "")), report))
+                else:  # reassess
+                    text = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.is_file() else ""
+                    self._json(analyst.reassess(history.parse_findings(text)))
 
         elif self.path == "/api/decision/snooze":
             raw = self._read_body()
@@ -816,6 +889,23 @@ def main() -> None:
         _recompute_decision()
     except Exception:
         pass
+
+    # ...but that restored state has has_update=None for everything, because
+    # the upgrade scan does not survive a restart. The decision agent fails
+    # toward showing risk, so the banner opened claiming several CRITICALs
+    # were urgent "update availability not checked yet" while the updates tab
+    # sat empty — nothing to act on. Refresh update availability in the
+    # background (~4s) and recompute, so the two views agree by the time the
+    # user has finished reading the page.
+    def _prime_update_state():
+        try:
+            _scan_updates_inline()
+            _recompute_decision()
+        except Exception:
+            pass  # offline / winget missing — the tri-state handles it
+
+    _spawn(_prime_update_state)
+
     scheduler.start(_scan_blocking, _urgent_count_and_score)  # periodic auto-scan + toast notification
     server = ThreadingHTTPServer((BIND_HOST, BIND_PORT), Handler)
     print(f"Dashboard running at http://{BIND_HOST}:{BIND_PORT}  (local only)")

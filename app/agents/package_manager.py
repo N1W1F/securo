@@ -21,6 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from audit import log
 from agents import winget_table
+from agents import sources as update_sources
+from agents.sources import winget_catalog
 
 AGENT = "Package Manager"
 
@@ -150,9 +152,11 @@ def scan_upgradable() -> list[dict]:
     # Everything winget's own upgrade check cannot see — recover what we can.
     untracked = [r for r in rows if r.get("Source") not in UPGRADABLE_SOURCES]
     installed_ids = {(r.get("Id") or "").strip().casefold() for r in rows}
-    recovered = _recover_untracked_upgrades(untracked, installed_ids)
+    recovered, bucket_counts = _classify_and_recover(untracked, installed_ids)
     upgradable.extend(recovered)
     _last_coverage["recovered"] = len(recovered)
+    _last_buckets.clear()
+    _last_buckets.update(bucket_counts)
 
     _last_scanned_ids = {r["Id"] for r in upgradable}
     log(AGENT, f"found {len(upgradable)} package(s) with an available update "
@@ -163,84 +167,113 @@ def scan_upgradable() -> list[dict]:
 
 
 def _search_exact(name: str) -> list[dict]:
-    """`winget search --exact` for one product name. [] on any failure.
+    """Back-compat shim over the winget catalog source.
 
-    --exact is load-bearing: a fuzzy search for "Discord" also returns
-    "Discord Canary", "BetterDiscord", etc., and picking one of those would
-    offer the user an update that replaces their software with a different
-    program.
+    Kept because the Golden Dataset injects here to exercise the recovery
+    logic without spawning real winget processes.
     """
-    try:
-        result = _run([WINGET, "search", "--name", name, "--source", "winget",
-                       "--exact", "--accept-source-agreements"], SEARCH_TIMEOUT_SECS)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    m = winget_catalog.lookup(name)
+    if m is None:
         return []
-    if result.returncode != 0 or not winget_table.looks_like_table(result.stdout):
-        return []          # "No package found matching input criteria." — normal
-    return winget_table.parse(result.stdout)
+    if m.ambiguous:
+        return [{}, {}]      # length > 1 signals ambiguity to the caller
+    return [{"Id": m.package_id, "Version": m.version or "", "Source": m.source}]
+
+
+# How an untracked program ended up unchecked. Each bucket carries a
+# different message and a different action for the user, which is the whole
+# point of classifying instead of reporting one opaque "116 untracked".
+BUCKET_RECOVERED  = "recovered"      # a real catalog update was found
+BUCKET_STORE      = "store"          # Microsoft Store app — Windows updates it
+BUCKET_NO_SOURCE  = "no_source"      # in no catalog at all (drivers, OEM bundles)
+BUCKET_NO_VERSION = "no_version"     # installed version unusable for comparison
+BUCKET_DUPLICATE  = "duplicate"      # same program already tracked under its own row
+BUCKET_AMBIGUOUS  = "ambiguous"      # several catalog packages share the name
+
+_last_buckets: dict[str, int] = {}
+
+
+def buckets() -> dict:
+    """Why each untracked program could not be update-checked."""
+    return dict(_last_buckets)
+
+
+def _classify_and_recover(untracked: list[dict],
+                          installed_ids: set[str]) -> tuple[list[dict], dict]:
+    """Consult every update source for each untracked program.
+
+    Returns (recovered_upgrade_rows, bucket_counts). A program is only ever
+    reported as upgradable when a version-capable source resolves it AND the
+    version comparison is unambiguous; everything else is classified so the
+    UI can explain it instead of leaving it an unexplained gap.
+
+    Lookups are independent subprocesses, so they run on a small pool.
+    """
+    counts = {BUCKET_RECOVERED: 0, BUCKET_STORE: 0, BUCKET_NO_SOURCE: 0,
+              BUCKET_NO_VERSION: 0, BUCKET_DUPLICATE: 0, BUCKET_AMBIGUOUS: 0}
+    if not untracked:
+        return [], counts
+
+    sources = update_sources.available_sources()
+
+    def probe(row):
+        name = (row.get("Name") or "").strip()
+        installed = (row.get("Version") or "").strip()
+        if not name or _version_tuple(installed) is None:
+            # Nothing to compare against, so no source can help. Still worth
+            # asking the Store, because "this is a Store app" explains it.
+            for src in sources:
+                if not src.CAN_COMPARE and src.lookup(name):
+                    return BUCKET_STORE, None
+            return BUCKET_NO_VERSION, None
+
+        for src in sources:
+            m = src.lookup(name)
+            if m is None:
+                continue
+            if m.ambiguous:
+                return BUCKET_AMBIGUOUS, None
+            if not src.CAN_COMPARE or m.version is None:
+                # Identified but unversionable — the Store case.
+                return BUCKET_STORE, None
+            if not PACKAGE_ID_RE.match(m.package_id):
+                return BUCKET_NO_SOURCE, None
+            # If that catalog package is ALREADY installed under its own row,
+            # this untracked row is a different component that merely shares a
+            # name — e.g. "WinRAR" the MSIX shell extension (1.0.0.2) next to
+            # "WinRAR 7.23 (64-bit)" (RARLab.WinRAR, current). Comparing the
+            # extension's version against the app's package invented an
+            # upgrade for software already up to date.
+            if m.package_id.casefold() in installed_ids:
+                return BUCKET_DUPLICATE, None
+            if not _is_newer(m.version, installed):
+                return BUCKET_DUPLICATE, None     # known to the catalog, already current
+            return BUCKET_RECOVERED, {
+                "Name": name, "Id": m.package_id, "Version": installed,
+                "Available": m.version, "Source": m.source, "Recovered": True,
+            }
+        return BUCKET_NO_SOURCE, None
+
+    try:
+        with ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
+            results = list(pool.map(probe, untracked))
+    except Exception as exc:                 # thread pool refused to start
+        log(AGENT, f"update-source pass skipped: {type(exc).__name__}")
+        return [], counts
+
+    recovered = []
+    for bucket, row in results:
+        counts[bucket] = counts.get(bucket, 0) + 1
+        if row:
+            recovered.append(row)
+    return recovered, counts
 
 
 def _recover_untracked_upgrades(untracked: list[dict],
                                 installed_ids: set[str]) -> list[dict]:
-    """Find updates for software winget lists but cannot upgrade-check.
-
-    Most installed software carries no winget Source: it was installed
-    outside any catalog, so `winget upgrade` never considers it and its
-    updates are invisible — on this machine that was 94 of 134 programs,
-    including Discord, which was a genuine 1.0.9246 -> 1.0.9249 behind.
-
-    The recovery is a per-name exact search of the winget catalog, then a
-    strict numeric version comparison. Both sides must parse as plain dotted
-    numbers and the catalog must be strictly newer, otherwise the entry is
-    dropped. Searches are independent processes, so they run concurrently;
-    the whole pass costs a few seconds.
-    """
-    candidates = []
-    for row in untracked:
-        name = (row.get("Name") or "").strip()
-        installed = (row.get("Version") or "").strip()
-        if not name or _version_tuple(installed) is None:
-            continue                       # nothing to compare against
-        candidates.append((name, installed))
-    if not candidates:
-        return []
-
-    def probe(pair):
-        name, installed = pair
-        matches = _search_exact(name)
-        # Ambiguity is a reason to stay silent, not to guess.
-        if len(matches) != 1:
-            return None
-        m = matches[0]
-        available, pkg_id = (m.get("Version") or "").strip(), (m.get("Id") or "").strip()
-        if not PACKAGE_ID_RE.match(pkg_id):
-            return None
-        # If that catalog package is ALREADY installed under its own row, this
-        # untracked row is a different component that merely shares a name —
-        # e.g. "WinRAR" the MSIX shell extension (1.0.0.2) alongside "WinRAR
-        # 7.23 (64-bit)" (RARLab.WinRAR, 7.23.0, current). Comparing the
-        # extension's version against the app's package invented an update for
-        # software that was already up to date. winget already tracks the real
-        # package, so there is nothing here for us to add.
-        if pkg_id.casefold() in installed_ids:
-            return None
-        if not _is_newer(available, installed):
-            return None
-        return {"Name": name, "Id": pkg_id, "Version": installed,
-                "Available": available, "Source": "winget", "Recovered": True}
-
-    try:
-        with ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
-            results = list(pool.map(probe, candidates))
-    except Exception as exc:                 # thread pool refused to start
-        log(AGENT, f"name-match recovery skipped: {type(exc).__name__}")
-        return []
-
-    found = [r for r in results if r]
-    if found:
-        log(AGENT, f"recovered {len(found)} update(s) winget's upgrade check missed "
-                   f"(exact name match across {len(candidates)} untracked package(s))")
-    return found
+    """Update rows only. Kept as the narrow entry point the tests target."""
+    recovered, _ = _classify_and_recover(untracked, installed_ids)
+    return recovered
 
 
 def get_details(package_id: str) -> dict:

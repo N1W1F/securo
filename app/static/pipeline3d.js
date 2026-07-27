@@ -10,19 +10,37 @@ import { RenderPass }     from '/vendor/three/addons/postprocessing/RenderPass.j
 import { UnrealBloomPass }from '/vendor/three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass }     from '/vendor/three/addons/postprocessing/OutputPass.js';
 
-const KEYS   = ["Orchestrator","Threat Hunter","Asset Auditor","Remediation"]; // server log tags
-// Agent names/descriptions are read from the shared i18n table on every
-// use, not snapshotted into a const, so the scene follows the language
-// switch instead of staying in whatever language the page loaded in.
-// i18n.js is a classic script loaded before this module, so `t` exists.
-const NAME_KEYS = ["stageOrchestrator","stageThreatHunter","stageAssetAuditor","stageRemediation"];
-const DESC_KEYS = ["agentDescOrchestrator","agentDescHunter","agentDescAuditor","agentDescRemediation"];
+// All EIGHT agents, in pipeline order. The scene used to render only the four
+// that run inside the scan subprocess and therefore appear in the scan log;
+// the other four run in the server process, so half the architecture was
+// invisible and the app looked like a 4-agent system.
+//
+// `log` = the tag this agent writes into the scan log (subprocess agents).
+// `api` = the name the server reports on /api/agents (in-process agents).
+// An agent has exactly one of the two — that is precisely the split.
+const AGENTS_DEF = [
+  { log:"Orchestrator",    name:"stageOrchestrator",   desc:"agentDescOrchestrator",   col:0xa855f7 },
+  { log:"Asset Auditor",   name:"stageAssetAuditor",   desc:"agentDescAuditor",        col:0xf5a524 },
+  { api:"Package Manager", name:"stagePackageManager", desc:"agentDescPackageManager", col:0xf59e0b },
+  { log:"Threat Hunter",   name:"stageThreatHunter",   desc:"agentDescHunter",         col:0x22d3ee },
+  { api:"KEV Checker",     name:"stageKevChecker",     desc:"agentDescKev",            col:0x38bdf8 },
+  { api:"Decision",        name:"stageDecision",       desc:"agentDescDecision",       col:0x818cf8 },
+  { log:"Remediation",     name:"stageRemediation",    desc:"agentDescRemediation",    col:0x3ddc84 },
+  { api:"Analyst",         name:"stageAnalyst",        desc:"agentDescAnalyst",        col:0xc084fc },
+];
+const KEYS      = AGENTS_DEF.map(a => a.log || a.api);   // stable identity per slot
+const LOG_TAGS  = AGENTS_DEF.map(a => a.log || null);
+const API_NAMES = AGENTS_DEF.map(a => a.api || null);
+// Names/descriptions are read from the shared i18n table on every use, not
+// snapshotted into a const, so the scene follows the language switch instead
+// of staying in whatever language the page loaded in. i18n.js is a classic
+// script loaded before this module, so `t` exists.
 const tr        = k => (typeof t === "function" ? t(k) : k);
-const AGENT_N   = KEYS.length;
-const agentName = i => tr(NAME_KEYS[i]);
-const agentDesc = i => tr(DESC_KEYS[i]);
-const COL = [0xa855f7, 0x22d3ee, 0xf5a524, 0x3ddc84];
-const CSS = ["#a855f7", "#22d3ee", "#f5a524", "#3ddc84"];
+const AGENT_N   = AGENTS_DEF.length;
+const agentName = i => tr(AGENTS_DEF[i].name);
+const agentDesc = i => tr(AGENTS_DEF[i].desc);
+const COL = AGENTS_DEF.map(a => a.col);
+const CSS = COL.map(c => "#" + c.toString(16).padStart(6, "0"));
 
 const $ = id => document.getElementById(id);
 const canvas = $('p3d');
@@ -160,12 +178,47 @@ const coreRings = [];
   scene.add(ring); coreRings.push(ring);
 });
 
-/* ---------- agent satellites (gyroscope style) ---------- */
-const ORBIT_R = 4.6;
-const P = KEYS.map((_, i) => {
-  const a = (i / AGENT_N) * Math.PI*2 + Math.PI/4;
-  return new THREE.Vector3(Math.cos(a)*ORBIT_R, Math.sin(i*2.1)*.55, Math.sin(a)*ORBIT_R);
-});
+/* ---------- agent satellites ----------
+   Each agent gets a geometry that states what it DOES, so the scene can be
+   read without the labels, plus its own orbit. Eight identical octahedrons
+   on one fixed ring said nothing and read as decoration.
+
+   Orbits differ in radius, speed, inclination and phase so the ring never
+   collapses into a line and the system reads as alive rather than posed.
+   Inner orbits = earlier pipeline stages. */
+const ORBITS = [
+  // Orchestrator: closest to the core, slowest — it presides, it doesn't chase
+  { r:3.15, speed:0.055, tilt:0.00, phase:0.00 },
+  { r:4.05, speed:0.115, tilt:0.20, phase:0.80 },   // Asset Auditor
+  { r:4.55, speed:0.100, tilt:-0.16, phase:1.70 },  // Package Manager
+  { r:5.30, speed:0.082, tilt:0.30, phase:2.55 },   // Threat Hunter
+  { r:5.75, speed:0.075, tilt:-0.26, phase:3.45 },  // KEV Checker
+  { r:6.35, speed:0.064, tilt:0.13, phase:4.35 },   // Decision
+  { r:6.90, speed:0.058, tilt:-0.33, phase:5.20 },  // Remediation
+  { r:7.55, speed:0.048, tilt:0.24, phase:6.05 },   // Analyst
+];
+
+function agentGeometry(i){
+  switch (i) {
+    // Orchestrator — an interwoven knot: many threads, one coordinator
+    case 0: return new THREE.TorusKnotGeometry(.30, .085, 128, 12, 2, 3);
+    // Asset Auditor — a stack of boxes: it inventories what is installed
+    case 1: return new THREE.BoxGeometry(.46, .46, .46);
+    // Package Manager — a flat crate: packages, delivered
+    case 2: return new THREE.BoxGeometry(.60, .30, .44);
+    // Threat Hunter — a cone: a directed probe sweeping for matches
+    case 3: return new THREE.ConeGeometry(.34, .72, 6);
+    // KEV Checker — a spiked star: confirmed, weaponised exploitation
+    case 4: return new THREE.TetrahedronGeometry(.46, 0);
+    // Decision — a balanced octahedron: weighing both sides
+    case 5: return new THREE.OctahedronGeometry(.42, 0);
+    // Remediation — a closed ring: the loop from finding to fix
+    case 6: return new THREE.TorusGeometry(.32, .12, 12, 40);
+    // Analyst — a dense faceted sphere: a model, many parameters
+    default: return new THREE.IcosahedronGeometry(.40, 2);
+  }
+}
+
 const shellMat = hex => new THREE.ShaderMaterial({
   transparent:true, blending:THREE.AdditiveBlending, depthWrite:false,
   uniforms:{ uTime:{value:0}, uCol:{value:new THREE.Color(hex)}, uAct:{value:0} },
@@ -180,45 +233,55 @@ const shellMat = hex => new THREE.ShaderMaterial({
       float band=0.5+0.5*sin(vP.y*9.0-uTime*2.8);
       gl_FragColor=vec4(uCol*(0.85+uAct*1.5), fres*(0.55+uAct*.8)+band*.11*(0.3+uAct)); }`
 });
+
+// Live positions — recomputed every frame from the orbits.
+const P = ORBITS.map(() => new THREE.Vector3());
+function orbitPosition(i, time, out){
+  const o = ORBITS[i];
+  const a = o.phase + time * o.speed;
+  return out.set(Math.cos(a) * o.r, Math.sin(a) * o.r * o.tilt, Math.sin(a) * o.r);
+}
+ORBITS.forEach((_, i) => orbitPosition(i, 0, P[i]));
+
 const sats = [];
-P.forEach((p, i) => {
-  const g = new THREE.Group(); g.position.copy(p);
-  const c = new THREE.Mesh(new THREE.OctahedronGeometry(.42, 1), shellMat(COL[i]));
+P.forEach((pos, i) => {
+  const g = new THREE.Group(); g.position.copy(pos);
+  const c = new THREE.Mesh(agentGeometry(i), shellMat(COL[i]));
   g.add(c);
-  const rings = [];
-  [.68, .82, .96].forEach((r, k) => {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, .012, 6, 80),
-      new THREE.MeshBasicMaterial({ color:COL[i], transparent:true, opacity:.22,
-        blending:THREE.AdditiveBlending, depthWrite:false }));
-    ring.rotation.set(k*1.1, k*.7, k*.4);
-    g.add(ring); rings.push(ring);
-  });
+  // One gyro ring instead of three: with eight distinct bodies the triple
+  // rings turned the scene into overlapping wire soup.
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(.80, .010, 6, 72),
+    new THREE.MeshBasicMaterial({ color:COL[i], transparent:true, opacity:.18,
+      blending:THREE.AdditiveBlending, depthWrite:false }));
+  ring.rotation.set(i * 0.7, i * 0.4, 0);
+  g.add(ring);
   scene.add(g);
-  sats.push({ group:g, core:c, rings });
+  sats.push({ group:g, core:c, rings:[ring] });
 });
 
-/* ---------- spokes: core -> each agent, with flow pulses ---------- */
-const flowMat = hex => new THREE.ShaderMaterial({
-  transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide,
-  uniforms:{ uTime:{value:0}, uOn:{value:0}, uCol:{value:new THREE.Color(hex)} },
-  vertexShader:`varying vec2 vUv; void main(){ vUv=uv;
-    gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-  fragmentShader:`uniform float uTime; uniform float uOn; uniform vec3 uCol; varying vec2 vUv;
-    void main(){ float a=.04;
-      for(int k=0;k<3;k++){
-        float head=fract(vUv.x-uTime*.55+float(k)*.33);
-        a+=(smoothstep(.95,1.,head)+smoothstep(.06,0.,head))*uOn*.5;
-      }
-      gl_FragColor=vec4(uCol*(1.+a*1.8), a); }`
+/* ---------- spokes: core -> each agent ----------
+   Dynamic lines, not tube meshes. The agents now move, and rebuilding eight
+   40-segment TubeGeometries every frame to follow them would cost more than
+   the rest of the scene combined. Two vertices per spoke, rewritten in place. */
+const spokes = [];
+P.forEach((pos, i) => {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const mat = new THREE.LineBasicMaterial({ color:COL[i], transparent:true, opacity:.12,
+    blending:THREE.AdditiveBlending, depthWrite:false });
+  const line = new THREE.Line(geo, mat);
+  scene.add(line);
+  spokes.push({ geo, mat });
 });
-const spokes = [], spokeCurves = [];
-P.forEach((p, i) => {
-  const mid = p.clone().multiplyScalar(.5); mid.y += 1.1;
-  const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0,0,0), mid, p]);
-  const m = flowMat(COL[i]);
-  scene.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 40, .035, 8, false), m));
-  spokes.push(m); spokeCurves.push(curve);
-});
+
+function updateSpokes(){
+  for (let i = 0; i < spokes.length; i++){
+    const a = spokes[i].geo.attributes.position;
+    a.setXYZ(0, 0, 0, 0);
+    a.setXYZ(1, P[i].x, P[i].y, P[i].z);
+    a.needsUpdate = true;
+  }
+}
 
 /* ---------- data packets travelling core -> active agent ---------- */
 const packets = [];
@@ -228,7 +291,9 @@ function spawnPacket(i){
     new THREE.MeshBasicMaterial({ color:COL[i], transparent:true, opacity:.75,
       blending:THREE.AdditiveBlending, depthWrite:false }));
   scene.add(mesh);
-  packets.push({ mesh, t:0, curve:spokeCurves[i] });
+  // Target index, not a frozen curve: the destination is moving, so a packet
+  // must re-aim at where its agent is NOW or it flies off to a stale point.
+  packets.push({ mesh, t:0, target:i });
 }
 
 /* ---------- urgent shards: one red tetra per urgent finding (cap 14) ---------- */
@@ -280,31 +345,60 @@ const labels = ov ? KEYS.map((_, i) => {
 function updateLabels(){
   if (!ov) return;
   const w = canvas.clientWidth, h = canvas.clientHeight;
+
+  // Pass 1: project every agent to screen space and record its depth.
+  const placed = [];
   sats.forEach((s, i) => {
-    const v = s.group.getWorldPosition(new THREE.Vector3()).project(camera);
-    const el = labels[i];
-    el.style.right = (w-(v.x*.5+.5)*w)+'px';
-    el.style.top = ((-v.y*.5+.5)*h-56)+'px';
-    el.style.opacity = v.z > 1 ? 0 : 1;
-    const on = i === state.active, dn = i < state.doneUpTo;
+    const world = s.group.getWorldPosition(new THREE.Vector3());
+    const dist = camera.position.distanceTo(world);
+    const v = world.clone().project(camera);
+    placed.push({
+      i,
+      behind: v.z > 1,
+      x: (v.x * .5 + .5) * w,          // from the LEFT edge
+      y: (-v.y * .5 + .5) * h - 52,
+      dist,
+    });
+  });
+
+  // Pass 2: de-collide vertically. Eight bodies on eight orbits regularly
+  // line up on screen; a fixed per-index offset still stacked neighbours into
+  // an unreadable pile. Nearest-to-camera keeps its spot and anything behind
+  // it that would overlap gets pushed down, so the front label — the one the
+  // user is most likely reading — never moves.
+  const LBL_W = 108, LBL_H = 30;
+  placed.sort((a, b) => a.dist - b.dist);
+  const taken = [];
+  for (const p of placed) {
+    if (p.behind) continue;
+    let guard = 0;
+    while (guard++ < 12 && taken.some(q =>
+             Math.abs(q.x - p.x) < LBL_W && Math.abs(q.y - p.y) < LBL_H)) {
+      p.y += LBL_H;
+    }
+    taken.push(p);
+  }
+
+  // Pass 3: write to the DOM.
+  for (const p of placed) {
+    const el = labels[p.i];
+    el.style.right = (w - p.x) + 'px';
+    el.style.top = p.y + 'px';
+    // Fade with depth so the far side of the ring recedes instead of
+    // competing with the agents in front of it.
+    //
+    // Uses real camera distance, NOT the projected z: perspective NDC z is
+    // nonlinear and pins almost everything to ~0.99, which faded all eight
+    // labels to the same minimum instead of separating near from far.
+    const depth = Math.min(1, Math.max(0, (p.dist - 9) / 15));
+    el.style.opacity = p.behind ? '0' : (1 - depth * 0.62).toFixed(2);
+
+    const on = p.i === state.active || apiActive[p.i], dn = p.i < state.doneUpTo;
     el.classList.toggle('on', on); el.classList.toggle('done', dn && !on);
     el.querySelector('.st').textContent =
       on ? tr('agentRunning') : (dn ? tr('stageDone') : tr('stageReady'));
-  });
-}
-
-// The language switch re-renders [data-i18n] nodes, but these labels and the
-// agent card are built in JS, so they have to be refreshed explicitly.
-// Chain onto any existing handler instead of replacing it — app.js owns one.
-const _prevLangChange = window.onLangChange;
-window.onLangChange = function () {
-  if (typeof _prevLangChange === "function") _prevLangChange.apply(this, arguments);
-  labels.forEach((el, i) => { el.querySelector('.nm').textContent = agentName(i); });
-  if (card && !card.hidden && state.selected >= 0) {
-    cardName.textContent = agentName(state.selected);
-    cardDesc.textContent = agentDesc(state.selected);
   }
-};
+}
 
 /* ---------- optional HUD refs (host page may lack any of these) ---------- */
 const m0=$('m0'), m1=$('m1'), m2=$('m2'), m3=$('m3'), f0=$('f0');
@@ -342,6 +436,7 @@ let logCursor = null;              // how far into the real log we've read
 let lastQueued = -1;               // tail of the queue (dedupe consecutive tags)
 let lastSwitch = 0;                // when the displayed agent last changed
 let scanRunning = false;
+let apiActive = [];   // per-slot busy flags for the in-process agents
 async function boot(){
   try{
     const r = await fetch(API+'/api/config'); if(!r.ok) throw 0;
@@ -360,7 +455,7 @@ async function pollReal(){
     const log = s.log || [];
     let act=-1, done=0;
     for (const line of log)
-      KEYS.forEach((k,i)=>{ if(line.includes(`(${k})`)){ act=i; done=Math.max(done,i); } });
+      LOG_TAGS.forEach((k,i)=>{ if(k && line.includes(`(${k})`)){ act=i; done=Math.max(done,i); } });
     // Don't set state.active from poll snapshots: with the NVD cache warm a
     // full scan finishes in ~3s, faster than one 800ms poll tick — snapshots
     // see only the final log line and the whole animation is skipped. Walk
@@ -372,13 +467,20 @@ async function pollReal(){
     if (log.length < logCursor) logCursor = 0;        // a new run reset the log
     for (; logCursor < log.length; logCursor++){
       const line = log[logCursor];
-      for (let i = 0; i < KEYS.length; i++){
-        if (line.includes(`(${KEYS[i]})`)){
+      for (let i = 0; i < LOG_TAGS.length; i++){
+        if (LOG_TAGS[i] && line.includes(`(${LOG_TAGS[i]})`)){
           if (i !== lastQueued && actQueue.length < 16){ actQueue.push(i); lastQueued = i; }
           break;
         }
       }
     }
+
+    // In-process agents never reach the scan log, so ask the server directly.
+    try{
+      const a = await fetch(API+'/api/agents').then(r=>r.json());
+      const busy = new Set(a.active || []);
+      apiActive = API_NAMES.map(n => !!(n && busy.has(n)));
+    }catch{ apiActive = API_NAMES.map(()=>false); }
     state.doneUpTo = s.running ? done : (s.done ? AGENT_N : 0);
     state.health = (d.health_score===undefined ? null : d.health_score);
     state.urgent = (d.urgent||[]).length;
@@ -394,16 +496,21 @@ canvas.addEventListener('mousemove', e => {
   mouse.x = ((e.clientX-r.left)/r.width-.5)*2;
   mouse.y = ((e.clientY-r.top)/r.height-.5)*2;
 });
-const camPos = new THREE.Vector3(0, 3.4, 11.5), camTgt = new THREE.Vector3(0, 0, 0);
+// Outermost orbit is 7.55, so the framing distance has to clear it plus
+// room for the projected labels above each body.
+const CAM_DIST = 16.5;
+const camPos = new THREE.Vector3(0, 4.6, CAM_DIST), camTgt = new THREE.Vector3(0, 0, 0);
 function updateCamera(t){
   let want, look;
   if (state.selected >= 0){
     const p = sats[state.selected].group.position;
-    want = p.clone().multiplyScalar(1.9).add(new THREE.Vector3(0, 1.6, 0));
+    // fixed offset outward from the body, not a scale of its orbit radius:
+    // scaling put the camera 14 units away for the outer agents
+    want = p.clone().normalize().multiplyScalar(p.length() + 3.4).add(new THREE.Vector3(0, 1.5, 0));
     look = p;
   } else {
     const az = t*.07 + mouse.x*.55;
-    want = new THREE.Vector3(Math.sin(az)*11.5, 3.4 - mouse.y*1.6, Math.cos(az)*11.5);
+    want = new THREE.Vector3(Math.sin(az)*CAM_DIST, 4.6 - mouse.y*2.0, Math.cos(az)*CAM_DIST);
     look = new THREE.Vector3(0, .1, 0);
   }
   camPos.lerp(want, .04); camTgt.lerp(look, .06);
@@ -444,24 +551,33 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
     r.material.color.lerp(new THREE.Color(healthCol(state.health)), .04); });
 
   sats.forEach((s,i)=>{
-    const on = i===state.active ? 1 : 0;
+    const on = (i===state.active || apiActive[i]) ? 1 : 0;
     const u = s.core.material.uniforms;
     u.uTime.value = t; u.uAct.value += (on-u.uAct.value)*.09;
     const a = u.uAct.value;
-    s.core.rotation.y += .006+on*.04; s.core.rotation.x += .003;
+
+    // Advance the orbit. An active agent speeds up slightly — the motion
+    // itself reports state, so the scene reads even at a glance.
+    orbitPosition(i, t * (1 + a * 0.8), P[i]);
+    P[i].y += Math.sin(t*.9 + i*2) * 0.12;      // gentle bob, keeps the ring from looking printed
+    s.group.position.copy(P[i]);
+
+    // Each body tumbles on its own axis mix so identical-looking rotation
+    // doesn't flatten the distinct shapes back into one silhouette.
+    s.core.rotation.y += .006 + on*.04 + i*.0009;
+    s.core.rotation.x += .003 + i*.0005;
     s.core.scale.setScalar(1+a*.5+(on?Math.sin(t*7)*.05:0));
-    s.rings.forEach((r,k)=>{
-      r.rotation.x += (.004+(k+1)*.003)*(1+a*3);
-      r.rotation.y += (.003+(k+1)*.002)*(1+a*3);
-      r.material.opacity = .18+a*.45;
+    s.rings.forEach((r)=>{
+      r.rotation.x += .005*(1+a*3);
+      r.rotation.z += .004*(1+a*3);
+      r.material.opacity = .14+a*.5;
     });
-    s.group.position.y = P[i].y + Math.sin(t*.9+i*2)*0.12;
   });
 
-  spokes.forEach((m,i)=>{
-    m.uniforms.uTime.value = t;
-    const on = i===state.active ? 1 : 0;
-    m.uniforms.uOn.value += (on-m.uniforms.uOn.value)*.1;
+  updateSpokes();
+  spokes.forEach((sp,i)=>{
+    const on = (i===state.active || apiActive[i]) ? 1 : 0;
+    sp.mat.opacity += ((on ? .55 : .10) - sp.mat.opacity)*.1;
   });
 
   if (state.active >= 0){
@@ -471,7 +587,9 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
   for (let i = packets.length-1; i >= 0; i--){
     const p = packets[i]; p.t += .022;
     if (p.t >= 1){ scene.remove(p.mesh); p.mesh.material.dispose(); packets.splice(i,1); continue; }
-    p.curve.getPoint(p.t, p.mesh.position);
+    // Re-aim at the target's CURRENT position each frame — it is orbiting.
+    const dst = P[p.target];
+    p.mesh.position.set(dst.x*p.t, dst.y*p.t, dst.z*p.t);
     p.mesh.material.opacity = .75*(1-Math.abs(p.t-.5)*.6);
   }
 

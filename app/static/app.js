@@ -615,7 +615,23 @@ function renderUpgProgress(p) {
 function coverageNote() {
   const c = (lastUpg && lastUpg.coverage) || null;
   if (!c || !c.total || !c.untracked) return "";
-  return `<p class="upd-coverage">${escapeHtml(t("updCoverage", c.tracked, c.total, c.untracked, c.recovered || 0))}</p>`;
+  const b = (lastUpg && lastUpg.buckets) || {};
+  // Each bucket has a different cause AND a different action. Reporting one
+  // opaque "116 untracked" told the user nothing they could act on.
+  const rows = [
+    ["store",      b.store],
+    ["no_source",  b.no_source],
+    ["no_version", b.no_version],
+    ["duplicate",  b.duplicate],
+    ["ambiguous",  b.ambiguous],
+  ].filter(([, n]) => n > 0);
+  const detail = rows.length
+    ? `<ul class="upd-buckets">${rows
+        .map(([k, n]) => `<li><b>${n}</b> ${escapeHtml(t("bucket_" + k))}</li>`)
+        .join("")}</ul>`
+    : "";
+  return `<p class="upd-coverage">${escapeHtml(
+    t("updCoverage", c.tracked, c.total, c.untracked, c.recovered || 0))}</p>${detail}`;
 }
 
 function renderUpdateRows() {

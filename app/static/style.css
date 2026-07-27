@@ -636,6 +636,8 @@ body::before{
 
 .btn-sm{padding:6px 12px !important;font-size:11.5px !important;}
 .inline-msg{font-size:11.5px;color:var(--amber);align-self:center;}
+.upd-buckets{margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;line-height:1.85;color:var(--muted);}
+.upd-buckets b{color:var(--text);font-family:var(--font-mono);}
 /* marks an update the standard winget upgrade check never reported — found
    by matching the installed product name against the catalog instead */
 .upd-recovered{
