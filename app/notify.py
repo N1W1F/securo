@@ -38,7 +38,7 @@ Set-ItemProperty -Path $regPath -Name "IconBackgroundColor" -Value "0xFF0A0612"
 
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType=WindowsRuntime] | Out-Null
-$xmlText = @"
+$xmlText = @'
 <toast>
   <visual>
     <binding template="ToastGeneric">
@@ -47,7 +47,7 @@ $xmlText = @"
     </binding>
   </visual>
 </toast>
-"@
+'@
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
 $xml.LoadXml($xmlText)
 $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
@@ -56,15 +56,38 @@ $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
 
 
 def _xml_escape(text: str) -> str:
+    """Escape for the toast XML.
+
+    NOTE: this is XML escaping only and is NOT sufficient on its own to make
+    text safe for PowerShell — see _ps_literal below. Both are applied.
+    """
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace('"', "&quot;").replace("'", "&apos;"))
+
+
+def _ps_literal(text: str) -> str:
+    """Neutralise PowerShell metacharacters in text bound for the script.
+
+    The toast body sits in a here-string. It used to be double-quoted (@"..."@),
+    which PowerShell INTERPOLATES: a title containing $(...) was evaluated as
+    code, and XML-escaping does not touch `$` or a backtick. Verified: a title
+    of "PROBE-$(1+1)-END" rendered as "PROBE-2-END".
+
+    The here-string is now single-quoted (@'...'@), which does not interpolate
+    at all, and this strips the metacharacters as a second layer so the
+    protection does not silently vanish if that quoting is ever changed back.
+    Current callers pass only literals, so this was latent rather than live —
+    but the obvious next feature (naming the affected product in the toast)
+    would have fed it names parsed straight out of winget output.
+    """
+    return text.replace("`", "").replace("$", "")
 
 
 def send(title: str, message: str) -> bool:
     if sys.platform != "win32":
         return False
-    title = _xml_escape((title or "")[:MAX_TITLE_CHARS])
-    message = _xml_escape((message or "")[:MAX_MESSAGE_CHARS])
+    title = _ps_literal(_xml_escape((title or "")[:MAX_TITLE_CHARS]))
+    message = _ps_literal(_xml_escape((message or "")[:MAX_MESSAGE_CHARS]))
     icon_path = str(RUNTIME_DIR / "static" / "icon.png")
     script = (_TOAST_SCRIPT.replace("__TITLE__", title).replace("__MESSAGE__", message)
                             .replace("__AUMID__", AUMID).replace("__ICON__", icon_path))

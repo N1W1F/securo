@@ -551,14 +551,46 @@ class Handler(BaseHTTPRequestHandler):
         token = self.headers.get("X-CSRF-Token", "")
         return secrets.compare_digest(token, CSRF_TOKEN)
 
+    # Sentinel for "the body was refused", distinct from "there was no body".
+    # These used to be the same value (None), and every caller collapsed it to
+    # `{}` — so an oversized request answered 200 OK as though the user had
+    # sent an empty object. A settings save over the limit reported success
+    # and saved nothing.
+    BODY_TOO_LARGE = object()
+
     def _read_body(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            return None
+            return self.BODY_TOO_LARGE
         if length < 0 or length > MAX_BODY_BYTES:
-            return None
+            # Drain what we can before refusing. Leaving the bytes unread
+            # desynchronises the connection: the next parse starts mid-body
+            # and the client sees a reset instead of our error.
+            remaining = min(length, 8 * MAX_BODY_BYTES) if length > 0 else 0
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            return self.BODY_TOO_LARGE
         return self.rfile.read(length) if length else b""
+
+    def _json_body(self):
+        """(ok, parsed_dict). Answers the client itself on refusal."""
+        raw = self._read_body()
+        if raw is self.BODY_TOO_LARGE:
+            self._json({"status": "payload_too_large"}, 413)
+            return False, {}
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            self._json({"status": "bad_request"}, 400)
+            return False, {}
+        if not isinstance(body, dict):
+            self._json({"status": "bad_request"}, 400)
+            return False, {}
+        return True, body
 
     # ---- response helpers -------------------------------------------------
 
@@ -672,11 +704,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/run":
-            raw = self._read_body()
-            try:
-                body = json.loads(raw or b"{}") if raw is not None else {}
-            except json.JSONDecodeError:
-                body = {}
+            ok, body = self._json_body()
+            if not ok:
+                return
             deep = bool(body.get("deep")) if isinstance(body, dict) else False
             if _try_start_orchestrator(deep=deep):
                 self._json({"status": "started", "deep": deep})
@@ -695,11 +725,8 @@ class Handler(BaseHTTPRequestHandler):
             if not _ai_rate_ok():
                 self._json({"available": True, "text": "", "rate_limited": True}, 429)
                 return
-            raw = self._read_body()
-            try:
-                body = json.loads(raw or b"{}") if raw is not None else {}
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             with _agent_span("Analyst"):
                 if self.path == "/api/ai/explain":
@@ -714,11 +741,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(analyst.reassess(history.parse_findings(text)))
 
         elif self.path == "/api/decision/snooze":
-            raw = self._read_body()
-            try:
-                body = json.loads(raw or b"{}") if raw is not None else {}
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             finding_id = body.get("id")
             remind_at = body.get("remindAt")
@@ -734,11 +758,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"status": "ok" if ok else "invalid_date"})
 
         elif self.path == "/api/startup/toggle":
-            raw = self._read_body()
-            try:
-                body = json.loads(raw or b"{}") if raw is not None else {}
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             want_enabled = bool(body.get("enabled"))
             ok = startup_shortcut.enable() if want_enabled else startup_shortcut.disable()
@@ -749,20 +770,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok})
 
         elif self.path == "/api/nvd/key":
-            raw = self._read_body()
-            try:
-                body = json.loads(raw or b"{}") if raw is not None else {}
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             self._json({"ok": appconfig.save_nvd_api_key(body.get("nvd_api_key", ""))})
 
         elif self.path == "/api/config/save":
-            raw = self._read_body()
-            try:
-                body = json.loads(raw or b"{}") if raw is not None else {}
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             if not isinstance(body, dict):
                 self._json({"status": "bad_request"}, 400)
@@ -776,14 +791,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"status": "started"})
 
         elif self.path == "/api/upgrades/details":
-            raw = self._read_body()
-            if raw is None:
-                self._json({"status": "bad_request"}, 400)
-                return
-            try:
-                body = json.loads(raw or b"{}")
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             pkg_id = body.get("id")
             if not isinstance(pkg_id, str):
@@ -802,14 +811,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"status": "started"})
 
         elif self.path == "/api/upgrades/apply":
-            raw = self._read_body()
-            if raw is None:
-                self._json({"status": "bad_request"}, 400)
-                return
-            try:
-                body = json.loads(raw or b"{}")
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             ids = body.get("ids")
             if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
@@ -830,14 +833,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"status": "started", "count": len(requested)})
 
         elif self.path == "/api/upgrades/ignore":
-            raw = self._read_body()
-            if raw is None:
-                self._json({"status": "bad_request"}, 400)
-                return
-            try:
-                body = json.loads(raw or b"{}")
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             pkg_id = body.get("id")
             if not isinstance(pkg_id, str):
@@ -857,14 +854,8 @@ class Handler(BaseHTTPRequestHandler):
             # unignore() existed and was tested but had no route — a user
             # who dismissed an update by mistake had no way back short of
             # editing ignored_updates.json by hand.
-            raw = self._read_body()
-            if raw is None:
-                self._json({"status": "bad_request"}, 400)
-                return
-            try:
-                body = json.loads(raw or b"{}")
-            except json.JSONDecodeError:
-                self._json({"status": "bad_request"}, 400)
+            ok, body = self._json_body()
+            if not ok:
                 return
             pkg_id = body.get("id")
             if not isinstance(pkg_id, str):

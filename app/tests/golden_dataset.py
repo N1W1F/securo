@@ -244,17 +244,17 @@ def ssrf_https():
 @test("DoS", "Content-Length كاذب ضخم", "رفض الجسم (None)",
       "حد أقصى لحجم الجسم", "A05 / Unrestricted Resource Consumption")
 def dos_huge_length():
-    return _handler({"Content-Length": str(10 ** 9)})._read_body() is None, ""
+    return _handler({"Content-Length": str(10 ** 9)})._read_body() is srv.Handler.BODY_TOO_LARGE, ""
 
 @test("DoS", "Content-Length سالب", "رفض", "تحقق length >= 0",
       "A05 / Unrestricted Resource Consumption")
 def dos_negative_length():
-    return _handler({"Content-Length": "-5"})._read_body() is None, ""
+    return _handler({"Content-Length": "-5"})._read_body() is srv.Handler.BODY_TOO_LARGE, ""
 
 @test("DoS", "Content-Length غير رقمي", "رفض", "معالجة ValueError",
       "A05 / Unrestricted Resource Consumption")
 def dos_bad_length():
-    return _handler({"Content-Length": "abc"})._read_body() is None, ""
+    return _handler({"Content-Length": "abc"})._read_body() is srv.Handler.BODY_TOO_LARGE, ""
 
 @test("DoS", "ملف أصول أكبر من الحد", "رفض القراءة (SecurityError)",
       "حد حجم ملف عند القراءة", "A05 / Unrestricted Resource Consumption")
@@ -1366,6 +1366,22 @@ def urgent_unknown_state_is_not_no_update():
         with srv._upg_lock:
             srv._upg_state.clear(); srv._upg_state.update(saved)
     return val is None, f"got {val!r}, expected None"
+
+
+
+@test("DoS", "الجسم المرفوض لا يُعامَل كطلب فارغ صالح",
+      "413 لا 200 — ولا يُخلط مع غياب الجسم",
+      "BODY_TOO_LARGE منفصل عن None في _json_body", "A05 / Fail-Safe")
+def dos_oversized_body_is_not_silently_empty():
+    # The bug: _read_body() returned None for BOTH "no body" and "body too
+    # large", and every caller collapsed None to {}. An oversized settings
+    # save answered 200 OK and saved nothing, telling the user it succeeded.
+    h = _handler({"Content-Length": str(srv.MAX_BODY_BYTES + 1)})
+    refused = h._read_body()
+    empty = _handler({"Content-Length": "0"})._read_body()
+    return (refused is srv.Handler.BODY_TOO_LARGE
+            and empty == b""
+            and refused is not empty), f"refused={refused!r} empty={empty!r}"
 
 
 if __name__ == "__main__":
