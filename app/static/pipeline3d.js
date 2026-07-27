@@ -90,7 +90,9 @@ const camera = new THREE.PerspectiveCamera(50, 1, .1, 120);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(1,1), 0.5, 0.5, 0.22);
+// Threshold raised and strength cut: the sculpted silhouettes are the
+// point now, and the old settings melted their edges back into orbs.
+const bloom = new UnrealBloomPass(new THREE.Vector2(1,1), 0.34, 0.42, 0.42);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
@@ -137,46 +139,15 @@ const starMat = new THREE.ShaderMaterial({
 });
 scene.add(new THREE.Points(sGeo, starMat));
 
-/* ---------- reactor core (health) ---------- */
-const coreMat = new THREE.ShaderMaterial({
-  transparent:true, blending:THREE.AdditiveBlending, depthWrite:false,
-  uniforms:{ uTime:{value:0}, uCol:{value:new THREE.Color(0x7c3aed)}, uBeat:{value:0} },
-  vertexShader: NOISE + `
-    uniform float uTime; uniform float uBeat;
-    varying vec3 vN; varying vec3 vP; varying float vD;
-    void main(){
-      float d = snoise(normal*2.2 + uTime*.45) * (0.10 + uBeat*0.14);
-      vec3 p = position + normal*d;
-      vD = d;
-      vN = normalize(normalMatrix*normal);
-      vec4 mv = modelViewMatrix*vec4(p,1.0); vP = mv.xyz;
-      gl_Position = projectionMatrix*mv;
-    }`,
-  fragmentShader:`
-    uniform vec3 uCol; uniform float uTime;
-    varying vec3 vN; varying vec3 vP; varying float vD;
-    void main(){
-      vec3 V = normalize(-vP);
-      float fres = pow(1.0-max(dot(vN,V),0.0), 2.0);
-      float vein = smoothstep(.02,.09, vD);
-      vec3 col = uCol*(0.65 + fres*1.25 + vein*1.5);
-      gl_FragColor = vec4(col, 0.18 + fres*0.6 + vein*0.28);
-    }`
-});
-const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.15, 5), coreMat);
-scene.add(core);
-const heart = new THREE.Mesh(new THREE.SphereGeometry(.38, 24, 24),
-  new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:.5,
-    blending:THREE.AdditiveBlending, depthWrite:false }));
-scene.add(heart);
-const coreRings = [];
-[1.7, 2.05].forEach((r, k) => {
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(r, .016, 8, 128),
-    new THREE.MeshBasicMaterial({ color:0xa855f7, transparent:true, opacity:.26,
-      blending:THREE.AdditiveBlending, depthWrite:false }));
-  ring.rotation.x = Math.PI/2 + (k ? .28 : -.18);
-  scene.add(ring); coreRings.push(ring);
-});
+/* ---------- the centre: the Orchestrator itself ----------
+   It was an abstract "reactor" with the Orchestrator demoted to one more
+   satellite. That contradicted the architecture: the Orchestrator is what
+   calls every other agent, so it belongs at the hub with the spokes leaving
+   it. Its own sculpted form is used (shape field 0), and its colour carries
+   the health score — the coordinator showing the state of what it runs. */
+const CORE_INDEX = 0;
+let coreMat;      // assigned once the shared shell material is defined
+let core, heart, coreRings = [];
 
 /* ---------- agent satellites ----------
    Each agent gets a geometry that states what it DOES, so the scene can be
@@ -186,77 +157,193 @@ const coreRings = [];
    Orbits differ in radius, speed, inclination and phase so the ring never
    collapses into a line and the system reads as alive rather than posed.
    Inner orbits = earlier pipeline stages. */
+// Seven orbits — the Orchestrator is the hub and does not orbit anything.
+// Index 0 is a placeholder so every array here stays aligned with AGENTS_DEF.
 const ORBITS = [
-  // Orchestrator: closest to the core, slowest — it presides, it doesn't chase
-  { r:3.15, speed:0.055, tilt:0.00, phase:0.00 },
-  { r:4.05, speed:0.115, tilt:0.20, phase:0.80 },   // Asset Auditor
-  { r:4.55, speed:0.100, tilt:-0.16, phase:1.70 },  // Package Manager
-  { r:5.30, speed:0.082, tilt:0.30, phase:2.55 },   // Threat Hunter
-  { r:5.75, speed:0.075, tilt:-0.26, phase:3.45 },  // KEV Checker
-  { r:6.35, speed:0.064, tilt:0.13, phase:4.35 },   // Decision
-  { r:6.90, speed:0.058, tilt:-0.33, phase:5.20 },  // Remediation
-  { r:7.55, speed:0.048, tilt:0.24, phase:6.05 },   // Analyst
+  null,                                              // Orchestrator (centre)
+  { r:3.55, speed:0.115, tilt:0.46, phase:0.80 },   // Asset Auditor
+  { r:4.30, speed:0.100, tilt:-0.40, phase:1.70 },  // Package Manager
+  { r:4.95, speed:0.082, tilt:0.62, phase:2.55 },   // Threat Hunter
+  { r:5.55, speed:0.075, tilt:-0.58, phase:3.45 },  // KEV Checker
+  { r:6.05, speed:0.064, tilt:0.34, phase:4.35 },   // Decision
+  { r:6.55, speed:0.058, tilt:-0.66, phase:5.20 },  // Remediation
+  { r:7.00, speed:0.048, tilt:0.52, phase:6.05 },   // Analyst
 ];
 
-function agentGeometry(i){
-  switch (i) {
-    // Orchestrator — an interwoven knot: many threads, one coordinator
-    case 0: return new THREE.TorusKnotGeometry(.30, .085, 128, 12, 2, 3);
-    // Asset Auditor — a stack of boxes: it inventories what is installed
-    case 1: return new THREE.BoxGeometry(.46, .46, .46);
-    // Package Manager — a flat crate: packages, delivered
-    case 2: return new THREE.BoxGeometry(.60, .30, .44);
-    // Threat Hunter — a cone: a directed probe sweeping for matches
-    case 3: return new THREE.ConeGeometry(.34, .72, 6);
-    // KEV Checker — a spiked star: confirmed, weaponised exploitation
-    case 4: return new THREE.TetrahedronGeometry(.46, 0);
-    // Decision — a balanced octahedron: weighing both sides
-    case 5: return new THREE.OctahedronGeometry(.42, 0);
-    // Remediation — a closed ring: the loop from finding to fix
-    case 6: return new THREE.TorusGeometry(.32, .12, 12, 40);
-    // Analyst — a dense faceted sphere: a model, many parameters
-    default: return new THREE.IcosahedronGeometry(.40, 2);
-  }
+// Every agent is the SAME icosphere, sculpted into a different form by a
+// displacement field chosen per agent in the vertex shader. Nothing here is
+// a stock Three.js primitive — reaching for TorusKnot/Box/Cone/Tetrahedron is
+// exactly the built-in-dropdown look, and it reads as a demo rather than a
+// designed system.
+//
+// Each field is a signature, not decoration:
+//   0 Orchestrator  smooth 3-lobe harmonic breathing — many strands, one will
+//   1 Asset Auditor terraced shelves — a catalogue, quantised into records
+//   2 Package Mgr   sphere morphed toward a superquadric block — a crate
+//   3 Threat Hunter drawn to a point, with a ripple sweeping the surface
+//   4 KEV Checker   hard radial spines — confirmed, weaponised exploitation
+//   5 Decision      split into two offset hemispheres — weighing both sides
+//   6 Remediation   pulled outward into a closed ring — finding to fix
+//   7 Analyst       dense folded convolutions — a model, many parameters
+const AGENT_GEO = new THREE.IcosahedronGeometry(0.62, 4);
+
+const SHAPE_GLSL = `
+// --- displacement fields ---------------------------------------------------
+// Each returns a radial offset for a unit-sphere direction n.
+float fOrchestrator(vec3 n, float tm){
+  // three lobes rotating slowly about the pole
+  float a = atan(n.z, n.x);
+  return 0.52 * sin(3.0 * a + tm * 0.6) * (1.0 - n.y * n.y)
+       + 0.10 * sin(tm * 1.3);
+}
+float fAuditor(vec3 n, float tm){
+  // terraces: quantise latitude into shelves, so the silhouette steps
+  float lat = n.y;
+  float steps = 5.0;
+  return 0.90 * (floor(lat * steps) / steps - lat) + 0.10;
+}
+float fPackage(vec3 n, float tm){
+  // push toward a rounded block: the superquadric distance for p=6
+  vec3 a = abs(n);
+  float box = pow(pow(a.x, 6.0) + pow(a.y, 6.0) + pow(a.z, 6.0), 1.0 / 6.0);
+  return (1.0 / max(box, 0.15) - 1.0) * 0.85;
+}
+float fHunter(vec3 n, float tm){
+  // taper to a probe tip along +Y, with a scan ripple travelling down it
+  float taper = 0.85 * pow(n.y * 0.5 + 0.5, 2.0) - 0.30 * (1.0 - abs(n.y));
+  float ripple = 0.09 * sin(n.y * 14.0 - tm * 3.4);
+  return taper + ripple;
+}
+float fKev(vec3 n, float tm){
+  // hard spines: keep only the sharp peaks of a cheap 3-axis interference
+  float k = sin(n.x * 7.0) * sin(n.y * 7.0) * sin(n.z * 7.0);
+  return 1.05 * smoothstep(0.30, 1.0, abs(k)) - 0.10;
+}
+float fDecision(vec3 n, float tm){
+  // two hemispheres pulled apart, with a clean equatorial gap
+  float side = sign(n.y);
+  float gap  = smoothstep(0.0, 0.22, abs(n.y));
+  return side * 0.40 * gap + 0.22 * gap - 0.26;
+}
+float fRemediation(vec3 n, float tm){
+  // collapse the poles and push out the equator: a closed loop
+  float eq = 1.0 - abs(n.y);
+  return 0.85 * pow(eq, 3.0) - 0.55 * abs(n.y);
+}
+float fAnalyst(vec3 n, float tm){
+  // folded convolutions at two frequencies, slowly reorganising
+  float f = sin(n.x * 9.0 + tm * .5) * sin(n.y * 9.0 - tm * .4) * sin(n.z * 9.0)
+          + 0.5 * sin(n.x * 17.0) * sin(n.z * 17.0);
+  return 0.30 * f;
 }
 
-const shellMat = hex => new THREE.ShaderMaterial({
+float shapeField(int id, vec3 n, float tm){
+  if (id == 0) return fOrchestrator(n, tm);
+  if (id == 1) return fAuditor(n, tm);
+  if (id == 2) return fPackage(n, tm);
+  if (id == 3) return fHunter(n, tm);
+  if (id == 4) return fKev(n, tm);
+  if (id == 5) return fDecision(n, tm);
+  if (id == 6) return fRemediation(n, tm);
+  return fAnalyst(n, tm);
+}
+`;
+
+const shellMat = (hex, shapeId) => new THREE.ShaderMaterial({
   transparent:true, blending:THREE.AdditiveBlending, depthWrite:false,
-  uniforms:{ uTime:{value:0}, uCol:{value:new THREE.Color(hex)}, uAct:{value:0} },
-  vertexShader:`varying vec3 vN; varying vec3 vP;
-    void main(){ vN=normalize(normalMatrix*normal);
-      vec4 mv=modelViewMatrix*vec4(position,1.0); vP=mv.xyz;
-      gl_Position=projectionMatrix*mv; }`,
+  side:THREE.DoubleSide,
+  uniforms:{ uTime:{value:0}, uCol:{value:new THREE.Color(hex)}, uAct:{value:0},
+             uShape:{value:shapeId} },
+  vertexShader: SHAPE_GLSL + `
+    uniform float uTime; uniform float uAct; uniform int uShape;
+    varying vec3 vN; varying vec3 vP; varying float vD;
+
+    vec3 sculpt(vec3 n, float tm){
+      return n * (1.0 + shapeField(uShape, n, tm));
+    }
+    void main(){
+      vec3 n = normalize(position);
+      float tm = uTime;
+      vec3 p = sculpt(n, tm) * 0.62;
+      vD = shapeField(uShape, n, tm);
+
+      // Rebuild the normal from the sculpted surface. Using the sphere's
+      // original normal left every agent lit identically, which threw away
+      // the silhouette the displacement had just created.
+      vec3 t1 = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0.0,1.0,0.0)) : vec3(1.0,0.0,0.0));
+      vec3 t2 = cross(n, t1);
+      float e = 0.04;
+      vec3 pa = sculpt(normalize(n + t1 * e), tm) * 0.62;
+      vec3 pb = sculpt(normalize(n + t2 * e), tm) * 0.62;
+      vec3 nrm = normalize(cross(pa - p, pb - p));
+      if (dot(nrm, n) < 0.0) nrm = -nrm;
+
+      vN = normalize(normalMatrix * nrm);
+      vec4 mv = modelViewMatrix * vec4(p, 1.0); vP = mv.xyz;
+      gl_Position = projectionMatrix * mv;
+    }`,
   fragmentShader:`uniform float uTime; uniform vec3 uCol; uniform float uAct;
-    varying vec3 vN; varying vec3 vP;
-    void main(){ vec3 V=normalize(-vP);
-      float fres=pow(1.0-max(dot(vN,V),0.0),2.3);
-      float band=0.5+0.5*sin(vP.y*9.0-uTime*2.8);
-      gl_FragColor=vec4(uCol*(0.85+uAct*1.5), fres*(0.55+uAct*.8)+band*.11*(0.3+uAct)); }`
+    varying vec3 vN; varying vec3 vP; varying float vD;
+    void main(){
+      vec3 V = normalize(-vP);
+      float fres = pow(1.0 - max(dot(vN, V), 0.0), 3.0);
+      // ridges catch the light: the parts pushed furthest out read brightest,
+      // so each field's structure is legible instead of a uniform glow
+      float ridge = smoothstep(-0.05, 0.45, vD);
+      vec3 col = uCol * (0.55 + uAct * 1.3 + ridge * 1.5);
+      gl_FragColor = vec4(col, fres * (0.32 + uAct * 0.5) + ridge * 0.52 * (0.45 + uAct));
+    }`
 });
 
 // Live positions — recomputed every frame from the orbits.
 const P = ORBITS.map(() => new THREE.Vector3());
 function orbitPosition(i, time, out){
   const o = ORBITS[i];
+  if (!o) return out.set(0, 0, 0);      // the hub sits at the origin
   const a = o.phase + time * o.speed;
   return out.set(Math.cos(a) * o.r, Math.sin(a) * o.r * o.tilt, Math.sin(a) * o.r);
 }
 ORBITS.forEach((_, i) => orbitPosition(i, 0, P[i]));
 
+// The hub is bigger than the agents it drives, and its own material is kept
+// on `coreMat` so the render loop can drive its colour from the health score.
+const HUB_GEO = new THREE.IcosahedronGeometry(0.62, 5);
+coreMat = shellMat(COL[CORE_INDEX], CORE_INDEX);
+
 const sats = [];
 P.forEach((pos, i) => {
   const g = new THREE.Group(); g.position.copy(pos);
-  const c = new THREE.Mesh(agentGeometry(i), shellMat(COL[i]));
+  const isHub = i === CORE_INDEX;
+  const c = new THREE.Mesh(isHub ? HUB_GEO : AGENT_GEO,
+                           isHub ? coreMat : shellMat(COL[i], i));
+  if (isHub) { c.scale.setScalar(1.45); core = c; }
   g.add(c);
   // One gyro ring instead of three: with eight distinct bodies the triple
   // rings turned the scene into overlapping wire soup.
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(.80, .010, 6, 72),
-    new THREE.MeshBasicMaterial({ color:COL[i], transparent:true, opacity:.18,
-      blending:THREE.AdditiveBlending, depthWrite:false }));
-  ring.rotation.set(i * 0.7, i * 0.4, 0);
-  g.add(ring);
+  const rings = [];
+  if (isHub) {
+    // Two counter-rotating equator rings mark the hub as the thing everything
+    // else revolves around.
+    [1.30, 1.58].forEach((r, k) => {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(r, .014, 8, 128),
+        new THREE.MeshBasicMaterial({ color:COL[i], transparent:true, opacity:.26,
+          blending:THREE.AdditiveBlending, depthWrite:false }));
+      ring.rotation.x = Math.PI/2 + (k ? .28 : -.18);
+      g.add(ring); rings.push(ring); coreRings.push(ring);
+    });
+    heart = new THREE.Mesh(new THREE.SphereGeometry(.24, 24, 24),
+      new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:.5,
+        blending:THREE.AdditiveBlending, depthWrite:false }));
+    g.add(heart);
+  } else {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.02, .009, 6, 72),
+      new THREE.MeshBasicMaterial({ color:COL[i], transparent:true, opacity:.18,
+        blending:THREE.AdditiveBlending, depthWrite:false }));
+    ring.rotation.set(i * 0.7, i * 0.4, 0);
+    g.add(ring); rings.push(ring);
+  }
   scene.add(g);
-  sats.push({ group:g, core:c, rings:[ring] });
+  sats.push({ group:g, core:c, rings });
 });
 
 /* ---------- spokes: core -> each agent ----------
@@ -265,6 +352,7 @@ P.forEach((pos, i) => {
    the rest of the scene combined. Two vertices per spoke, rewritten in place. */
 const spokes = [];
 P.forEach((pos, i) => {
+  if (i === CORE_INDEX) { spokes.push(null); return; }   // the hub is the origin
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
   const mat = new THREE.LineBasicMaterial({ color:COL[i], transparent:true, opacity:.12,
@@ -276,6 +364,7 @@ P.forEach((pos, i) => {
 
 function updateSpokes(){
   for (let i = 0; i < spokes.length; i++){
+    if (!spokes[i]) continue;
     const a = spokes[i].geo.attributes.position;
     a.setXYZ(0, 0, 0, 0);
     a.setXYZ(1, P[i].x, P[i].y, P[i].z);
@@ -390,7 +479,7 @@ function updateLabels(){
     // Uses real camera distance, NOT the projected z: perspective NDC z is
     // nonlinear and pins almost everything to ~0.99, which faded all eight
     // labels to the same minimum instead of separating near from far.
-    const depth = Math.min(1, Math.max(0, (p.dist - 9) / 15));
+    const depth = Math.min(1, Math.max(0, (p.dist - 7) / 14));
     el.style.opacity = p.behind ? '0' : (1 - depth * 0.62).toFixed(2);
 
     const on = p.i === state.active || apiActive[p.i], dn = p.i < state.doneUpTo;
@@ -496,11 +585,15 @@ canvas.addEventListener('mousemove', e => {
   mouse.x = ((e.clientX-r.left)/r.width-.5)*2;
   mouse.y = ((e.clientY-r.top)/r.height-.5)*2;
 });
-// Outermost orbit is 7.55, so the framing distance has to clear it plus
+// Outermost orbit is 7.0, so the framing distance has to clear it plus
 // room for the projected labels above each body.
-const CAM_DIST = 16.5;
+const CAM_DIST = 14.2;
 const camPos = new THREE.Vector3(0, 4.6, CAM_DIST), camTgt = new THREE.Vector3(0, 0, 0);
+// Advanced only while the scene is busy, so the framing holds still when
+// the user is reading rather than sliding out from under them.
+let camAz = 0;
 function updateCamera(t){
+  camAz += .07 * .016 * mt;
   let want, look;
   if (state.selected >= 0){
     const p = sats[state.selected].group.position;
@@ -509,13 +602,35 @@ function updateCamera(t){
     want = p.clone().normalize().multiplyScalar(p.length() + 3.4).add(new THREE.Vector3(0, 1.5, 0));
     look = p;
   } else {
-    const az = t*.07 + mouse.x*.55;
+    // Camera auto-orbit was the worst offender: the whole frame slid even
+    // when nothing was happening. It now only drifts while busy; the mouse
+    // still steers at any time.
+    const az = camAz + mouse.x*.55;
     want = new THREE.Vector3(Math.sin(az)*CAM_DIST, 4.6 - mouse.y*2.0, Math.cos(az)*CAM_DIST);
     look = new THREE.Vector3(0, .1, 0);
   }
   camPos.lerp(want, .04); camTgt.lerp(look, .06);
   camera.position.copy(camPos); camera.lookAt(camTgt);
 }
+
+/* ---------- motion gate ----------
+   This is a dashboard panel, not a screensaver. Eight bodies orbiting, each
+   bobbing, each spinning, with the camera drifting on top, is a lot of motion
+   competing with a security report the user is trying to read.
+
+   So motion means "work is happening" instead of running forever: the scene
+   settles to near-still when idle and comes alive while a scan runs. That is
+   calmer AND more informative than constant ambient drift.
+
+   `mt` is the eased gate; `tm` is a motion-scaled clock, so anything driven
+   by it slows to a stop rather than snapping. */
+// Zero, not 'slow'. Any residual orbital drift still pulls the eye away
+// from the report; the scene should be genuinely still until there is
+// something to report. Liveness at rest comes from the star twinkle and
+// the urgent pulse, which do not move anything the user is reading.
+const REST_MOTION = 0;
+let mt = REST_MOTION, tm = 0, lastFrame = performance.now();
+const reduceMotion = matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ---------- main loop ---------- */
 let t = 0, packetTimer = 0;
@@ -526,6 +641,21 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
   requestAnimationFrame(loop);
   if (document.hidden) return; // don't burn GPU for a tab nobody sees
   t += .016;
+
+  // Busy when a scan is running, an agent is dispatching, or an in-process
+  // agent is working. Otherwise ease back to rest.
+  const now = performance.now();
+  // Clamped: a backgrounded tab can hand back a multi-second delta, which
+  // would snap the gate open and jump every orbit forward at once.
+  const dt = Math.min((now - lastFrame) / 1000, 0.05);
+  lastFrame = now;
+
+  const busy = scanRunning || state.active >= 0 || apiActive.some(Boolean);
+  const wantMotion = reduceMotion ? 0 : (busy ? 1 : REST_MOTION);
+  // Time-based ease (~1.2s to settle) instead of a per-frame constant, which
+  // opened the gate at a different speed on every refresh rate.
+  mt += (wantMotion - mt) * Math.min(1, dt * 2.6);
+  tm += dt * mt;
 
   // drain the hand-off queue with a minimum dwell so a cache-fast scan
   // still plays out visibly, one agent at a time
@@ -540,47 +670,59 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
   }
   updateCamera(t);
 
-  coreMat.uniforms.uTime.value = t;
-  coreMat.uniforms.uCol.value.lerp(new THREE.Color(healthCol(state.health)), .04);
-  const beat = state.urgent>0 ? (.5+.5*Math.sin(t*5.5))*.7 : .15;
-  coreMat.uniforms.uBeat.value += (beat - coreMat.uniforms.uBeat.value)*.08;
-  core.rotation.y += .004;
-  heart.material.color.lerp(new THREE.Color(healthCol(state.health)), .04);
-  heart.scale.setScalar(1 + Math.sin(t*3)*.05 + (state.urgent>0 ? Math.sin(t*5.5)*.06 : 0));
-  coreRings.forEach((r,k)=>{ r.rotation.z += (k? -.004 : .006);
-    r.material.color.lerp(new THREE.Color(healthCol(state.health)), .04); });
+  // The hub's colour is the health score: the coordinator showing the state
+  // of the system it coordinates. It shares the agents' shell material, so it
+  // has no separate `uBeat` uniform — urgency rides on uAct instead, which the
+  // satellite loop below already drives.
+  const hubCol = new THREE.Color(healthCol(state.health));
+  coreMat.uniforms.uCol.value.lerp(hubCol, .04);
+  heart.material.color.lerp(hubCol, .04);
+  // Breath is gated with everything else; the urgency pulse is not, because
+  // it is a warning rather than ambience.
+  heart.scale.setScalar(1 + Math.sin(tm*3)*.05*mt + (state.urgent>0 ? Math.sin(t*5.5)*.06 : 0));
+  coreRings.forEach((r,k)=>{ r.rotation.z += (k? -.004 : .006) * mt;
+    r.material.color.lerp(hubCol, .04); });
 
   sats.forEach((s,i)=>{
-    const on = (i===state.active || apiActive[i]) ? 1 : 0;
+    let on = (i===state.active || apiActive[i]) ? 1 : 0;
+    // The hub glows with urgency even when idle — it represents the whole
+    // system's posture, not just whether it happens to be dispatching now.
+    if (i === CORE_INDEX && state.urgent > 0) on = Math.max(on, .45 + .35*Math.sin(t*5.5));
     const u = s.core.material.uniforms;
-    u.uTime.value = t; u.uAct.value += (on-u.uAct.value)*.09;
+    u.uTime.value = tm; u.uAct.value += (on-u.uAct.value)*.09;
     const a = u.uAct.value;
 
-    // Advance the orbit. An active agent speeds up slightly — the motion
-    // itself reports state, so the scene reads even at a glance.
-    orbitPosition(i, t * (1 + a * 0.8), P[i]);
-    P[i].y += Math.sin(t*.9 + i*2) * 0.12;      // gentle bob, keeps the ring from looking printed
+    if (i === CORE_INDEX){
+      // The hub does not orbit — it is what the others orbit around.
+      P[i].set(0, 0, 0);
+    } else {
+      // Advance the orbit. An active agent speeds up slightly — the motion
+      // itself reports state, so the scene reads even at a glance.
+      orbitPosition(i, tm * (1 + a * 0.8), P[i]);
+      P[i].y += Math.sin(tm*.9 + i*2) * 0.12 * mt;    // gentle bob, so the ring never looks printed
+    }
     s.group.position.copy(P[i]);
 
     // Each body tumbles on its own axis mix so identical-looking rotation
     // doesn't flatten the distinct shapes back into one silhouette.
-    s.core.rotation.y += .006 + on*.04 + i*.0009;
-    s.core.rotation.x += .003 + i*.0005;
+    s.core.rotation.y += (.006 + i*.0009) * mt + on*.04;
+    s.core.rotation.x += (.003 + i*.0005) * mt;
     s.core.scale.setScalar(1+a*.5+(on?Math.sin(t*7)*.05:0));
     s.rings.forEach((r)=>{
-      r.rotation.x += .005*(1+a*3);
-      r.rotation.z += .004*(1+a*3);
+      r.rotation.x += .005*(1+a*3)*Math.max(mt, a);
+      r.rotation.z += .004*(1+a*3)*Math.max(mt, a);
       r.material.opacity = .14+a*.5;
     });
   });
 
   updateSpokes();
   spokes.forEach((sp,i)=>{
+    if (!sp) return;
     const on = (i===state.active || apiActive[i]) ? 1 : 0;
     sp.mat.opacity += ((on ? .55 : .10) - sp.mat.opacity)*.1;
   });
 
-  if (state.active >= 0){
+  if (state.active >= 0 && state.active !== CORE_INDEX){
     packetTimer -= .016;
     if (packetTimer <= 0){ spawnPacket(state.active); packetTimer = .38; }
   }
@@ -595,17 +737,18 @@ const healthCol = h => h===null ? 0x7c3aed : (h>=75 ? 0x3ddc84 : h>=45 ? 0xf5a52
 
   const liveShards = Math.min(state.urgent, SHARD_CAP);
   shards.forEach((s,i)=>{
-    const u = s.userData; u.a += .004*u.s;
+    const u = s.userData; u.a += .004*u.s*mt;
     s.position.set(Math.cos(u.a)*u.r, Math.sin(t*u.s+i)*.5, Math.sin(u.a)*u.r);
-    s.rotation.x += .02; s.rotation.y += .017;
+    s.rotation.x += .02*mt; s.rotation.y += .017*mt;
     const want = i < liveShards ? .65 : 0;
     s.material.opacity += (want - s.material.opacity)*.06;
   });
 
-  starMat.uniforms.uTime.value = t;
-  dustMat.uniforms.uTime.value = t;
+  starMat.uniforms.uTime.value = t;    // twinkle is the one thing that never stops:
+                                       // it signals 'alive' without moving any element
+  dustMat.uniforms.uTime.value = tm;
   // calmer glow ceiling: idle .5, scanning .72, urgent adds a touch
-  bloom.strength += (((state.active>=0?0.72:0.5)+(state.urgent>0?0.12:0)) - bloom.strength)*.05;
+  bloom.strength += (((state.active>=0?0.50:0.34)+(state.urgent>0?0.10:0)) - bloom.strength)*.05;
 
   updateLabels();
   if (m0){
