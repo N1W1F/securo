@@ -64,6 +64,7 @@ const I18N = {
     updateAll: "تحديث الكل",
     updatesEmpty: 'اضغط "فحص التحديثات المتاحة" لعرض البرامج القابلة للتحديث عبر winget.',
     updatesNone: "لا توجد تحديثات متاحة حالياً — كل شيء محدث.",
+    updatesScanning: "جاري فحص التحديثات المتاحة عبر winget… قد يستغرق بضع ثوانٍ.",
     updCoverage: (tracked, total, untracked, recovered) =>
       `يتتبّع winget التحديثات لـ ${tracked} من أصل ${total} برنامجاً مثبّتاً مباشرةً.` +
       (recovered
@@ -298,6 +299,7 @@ const I18N = {
     updateAll: "Update all",
     updatesEmpty: 'Click "Scan for updates" to list software upgradable via winget.',
     updatesNone: "No updates available right now — everything is up to date.",
+    updatesScanning: "Scanning for available updates via winget… this takes a few seconds.",
     updCoverage: (tracked, total, untracked, recovered) =>
       `winget tracks updates for ${tracked} of ${total} installed programs directly.` +
       (recovered

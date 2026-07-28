@@ -638,9 +638,16 @@ function renderUpdateRows() {
   const { items, results } = lastUpg;
   const resultById = Object.fromEntries((results || []).map((r) => [r.id, r]));
   if (!items.length) {
-    updatesBox.innerHTML = `<p class="empty-hint">${escapeHtml(
-      lastUpg.scanned ? t("updatesNone") : t("updatesEmpty")
-    )}</p>${lastUpg.scanned ? coverageNote() : ""}`;
+    // Three states, not two. This used to be scanned/not-scanned only, so
+    // while a scan was actually running the panel told the user to press the
+    // button to start one — directly above a log line saying it had started.
+    // The auto-scan at startup made that the FIRST thing the user sees.
+    const msg = lastUpg.running ? t("updatesScanning")
+              : lastUpg.scanned ? t("updatesNone")
+              : t("updatesEmpty");
+    updatesBox.innerHTML =
+      `<p class="empty-hint${lastUpg.running ? " is-busy" : ""}">${escapeHtml(msg)}</p>` +
+      (lastUpg.scanned && !lastUpg.running ? coverageNote() : "");
     applyAllBtn.hidden = true;
     return;
   }
@@ -735,6 +742,12 @@ async function fetchUpgradeStatus() {
   scanBtn.disabled = state.running;
   applyAllBtn.disabled = state.running || state.items.length === 0;
 
+  if (state.running && !upgPollTimer) {
+    // A scan we did not start (startup priming, or the one that runs after a
+    // security scan) is in progress — follow it, otherwise the panel freezes
+    // on whatever it showed before and never picks up the results.
+    upgPollTimer = setInterval(fetchUpgradeStatus, 900);
+  }
   if (!state.running && upgPollTimer) {
     clearInterval(upgPollTimer);
     upgPollTimer = null;

@@ -636,6 +636,9 @@ body::before{
 
 .btn-sm{padding:6px 12px !important;font-size:11.5px !important;}
 .inline-msg{font-size:11.5px;color:var(--amber);align-self:center;}
+.empty-hint.is-busy{color:var(--cyan);}
+/* the panel is waiting on a real background job, so say so visibly */
+.empty-hint.is-busy::after{content:"";display:inline-block;width:9px;height:9px;margin-inline-start:8px;border-radius:50%;background:var(--cyan);vertical-align:middle;animation:pulse 1.1s ease-in-out infinite;}
 .upd-buckets{margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;line-height:1.85;color:var(--muted);}
 .upd-buckets b{color:var(--text);font-family:var(--font-mono);}
 /* marks an update the standard winget upgrade check never reported — found
