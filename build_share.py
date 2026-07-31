@@ -12,7 +12,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
 OUT_DIR = BASE / "share"
-VERSION = "1.0"
+VERSION = "1.1"
 ZIP_PATH = OUT_DIR / f"Securo-v{VERSION}-source.zip"
 
 INCLUDE_TOP = ["README.md", "SHARING.md", "ARCHITECTURE.md", "requirements.txt",
