@@ -30,6 +30,7 @@ from security import (  # noqa: E402
     write_findings_atomic, sanitize_software_name, BASE_DIR, REPORT_PATH, MAX_INVENTORY_BYTES,
 )
 from agents import package_manager, threat_hunter, asset_auditor, winget_table  # noqa: E402
+from agents import sources as update_sources  # noqa: E402
 from agents import analyst  # noqa: E402
 from agents import kev_checker, decision as decision_agent  # noqa: E402
 from agents import remediation  # noqa: E402
@@ -244,17 +245,17 @@ def ssrf_https():
 @test("DoS", "Content-Length كاذب ضخم", "رفض الجسم (None)",
       "حد أقصى لحجم الجسم", "A05 / Unrestricted Resource Consumption")
 def dos_huge_length():
-    return _handler({"Content-Length": str(10 ** 9)})._read_body() is None, ""
+    return _handler({"Content-Length": str(10 ** 9)})._read_body() is srv.Handler.BODY_TOO_LARGE, ""
 
 @test("DoS", "Content-Length سالب", "رفض", "تحقق length >= 0",
       "A05 / Unrestricted Resource Consumption")
 def dos_negative_length():
-    return _handler({"Content-Length": "-5"})._read_body() is None, ""
+    return _handler({"Content-Length": "-5"})._read_body() is srv.Handler.BODY_TOO_LARGE, ""
 
 @test("DoS", "Content-Length غير رقمي", "رفض", "معالجة ValueError",
       "A05 / Unrestricted Resource Consumption")
 def dos_bad_length():
-    return _handler({"Content-Length": "abc"})._read_body() is None, ""
+    return _handler({"Content-Length": "abc"})._read_body() is srv.Handler.BODY_TOO_LARGE, ""
 
 @test("DoS", "ملف أصول أكبر من الحد", "رفض القراءة (SecurityError)",
       "حد حجم ملف عند القراءة", "A05 / Unrestricted Resource Consumption")
@@ -1204,6 +1205,182 @@ def main():
     print("All tests passed successfully!" if summary["failed"] == 0 else "SOME TESTS FAILED")
     print(f"\nreports: {REPORT_MD}\n         {REPORT_JSON}")
     return 0 if summary["failed"] == 0 else 1
+
+
+
+# ============================================================
+# 27. UPDATE-COVERAGE RECOVERY — winget's `upgrade` check only considers
+#     packages that carry a catalog Source. On a real machine that was 67 of
+#     183 installed programs; the other 116 (Discord, Brave, ChatGPT...) had
+#     their updates silently invisible, which is what "some programs have an
+#     update but never show up in the list" actually was.
+#     Recovery does an exact-name catalog lookup + strict version compare.
+#     These tests pin the guards that keep it from INVENTING updates, which
+#     would be worse than the gap it closes.
+# ============================================================
+
+
+class _FakeSource:
+    """Stand-in update source, so recovery tests never touch the real catalog."""
+    def __init__(self, name, can_compare, result):
+        self.NAME, self.CAN_COMPARE, self._result = name, can_compare, result
+    def lookup(self, name):
+        return self._result
+
+
+def _with_sources(sources, fn):
+    """Run fn() with available_sources() replaced. Restores unconditionally."""
+    orig = package_manager.update_sources.available_sources
+    package_manager.update_sources.available_sources = lambda: sources
+    try:
+        return fn()
+    finally:
+        package_manager.update_sources.available_sources = orig
+
+
+@test("Update Coverage", "مقارنة الإصدارات ترفض أي نص غير رقمي بدل تخمينه",
+      "_is_newer ترجع False لكل إصدار غير قابل للتحليل",
+      "package_manager._version_tuple يرجع None فتتوقف المقارنة", "Baseline / Data Integrity")
+def upd_version_compare_is_conservative():
+    cases = [
+        ("1.0.9249", "1.0.9246", True),    # genuine newer build
+        ("1.2.1",    "1.2",      True),    # deeper but greater
+        ("1.2",      "1.2.0",    False),   # zero-padded equal, not newer
+        ("1.0",      "1.0",      False),
+        ("Unknown",  "1.0",      False),   # winget's own placeholder
+        ("1.0",      "Unknown",  False),
+        ("",         "1.0",      False),
+        ("abc",      "1.0",      False),   # not a version at all
+        ("1.0",      "23H2",     False),   # Windows-style build label
+    ]
+    bad = [(a, b, want) for a, b, want in cases
+           if package_manager._is_newer(a, b) is not want]
+    return not bad, f"mismatches: {bad}"
+
+
+@test("Update Coverage", "لا يُخترع تحديث لبرنامج مثبّت أصلاً تحت معرّفه الخاص",
+      "الصف المطابق يُتجاهل لأن winget يتتبّع الحزمة الحقيقية بالفعل",
+      "installed_ids guard في _classify_and_recover", "Data Integrity / False Positive")
+def upd_recovery_skips_already_installed_package():
+    # The real regression: this machine lists BOTH
+    #   "WinRAR" -> MSIX\WinRAR.ShellExtension_1.0.0.2  (no Source, v1.0.0.2)
+    #   "WinRAR 7.23 (64-bit)" -> RARLab.WinRAR         (winget, v7.23.0, current)
+    # Matching the shell extension's name to RARLab.WinRAR and comparing
+    # 1.0.0.2 against 7.23.0 invented an update for software already current.
+    untracked = [{"Name": "WinRAR", "Id": "MSIX\WinRAR.ShellExtension_1.0.0.2_x64",
+                  "Version": "1.0.0.2", "Available": "", "Source": ""}]
+    installed_ids = {"rarlab.winrar", "msix\winrar.shellextension_1.0.0.2_x64"}
+    src = _FakeSource("winget", True, update_sources.Match(
+        source="winget", package_id="RARLab.WinRAR", version="7.23.0"))
+    out = _with_sources([src],
+        lambda: package_manager._recover_untracked_upgrades(untracked, installed_ids))
+    return out == [], f"invented an update: {out}"
+
+
+@test("Update Coverage", "تعدّد نتائج البحث يُسقِط الترشيح بدل اختيار واحد عشوائياً",
+      "لا يُرجَع أي تحديث عند وجود أكثر من حزمة مطابقة",
+      "ambiguous flag guard", "Data Integrity / False Positive")
+def upd_recovery_skips_ambiguous_match():
+    untracked = [{"Name": "Player", "Id": "ARP\Machine\X64\{abc}",
+                  "Version": "1.0", "Available": "", "Source": ""}]
+    src = _FakeSource("winget", True, update_sources.Match(
+        source="winget", package_id="", version=None, ambiguous=True))
+    out = _with_sources([src],
+        lambda: package_manager._recover_untracked_upgrades(untracked, set()))
+    return out == [], f"picked one of several ambiguous matches: {out}"
+
+
+@test("Update Coverage", "تحديث حقيقي مفقود من فحص winget يُسترجَع فعلاً",
+      "يُرجَع صف تحديث واحد موسوم Recovered بالإصدار الأحدث",
+      "_classify_and_recover exact-name path", "Baseline / Coverage")
+def upd_recovery_finds_genuinely_missed_update():
+    # Discord: installed on disk, newer in the catalog, no Source in
+    # `winget list` -> invisible to `winget upgrade`.
+    # The version here is a FIXTURE, not the live catalog: this test used to
+    # patch a seam the code no longer calls, so it silently queried the real
+    # winget catalog and broke the day Discord shipped a new build.
+    untracked = [{"Name": "Discord", "Id": "ARP\Machine\X64\{Discord}",
+                  "Version": "1.0.9246", "Available": "", "Source": ""}]
+    src = _FakeSource("winget", True, update_sources.Match(
+        source="winget", package_id="Discord.Discord", version="1.0.9249"))
+    out = _with_sources([src], lambda: package_manager._recover_untracked_upgrades(
+        untracked, {"arp\machine\x64\{discord}"}))
+    ok = (len(out) == 1 and out[0]["Id"] == "Discord.Discord"
+          and out[0]["Available"] == "1.0.9249" and out[0].get("Recovered") is True)
+    return ok, str(out)
+
+
+@test("Update Coverage", "صف بإصدار غير قابل للتحليل لا يُقارَن إطلاقاً",
+      "لا يُرجَع تحديث لبرنامج إصداره Unknown",
+      "فلترة _version_tuple قبل المقارنة", "Baseline / Data Integrity")
+def upd_recovery_ignores_unknown_installed_version():
+    untracked = [{"Name": "Mystery App", "Id": "ARP\X\{q}",
+                  "Version": "Unknown", "Available": "", "Source": ""}]
+    src = _FakeSource("winget", True, update_sources.Match(
+        source="winget", package_id="Some.Package", version="9.9.9"))
+    out = _with_sources([src],
+        lambda: package_manager._recover_untracked_upgrades(untracked, set()))
+    return out == [], f"compared an unusable version: {out}"
+
+
+@test("Urgent Consistency", "الفحص يحسم توفّر التحديث قبل تصنيف الأولويات",
+      "_run_orchestrator يستدعي فحص التحديثات قبل إعادة حساب القرار",
+      "server._scan_updates_inline قبل _recompute_decision", "Baseline / Consistency")
+def urgent_pipeline_resolves_updates_before_deciding():
+    import inspect
+    src = inspect.getsource(srv._run_orchestrator)
+    return ("_scan_updates_inline" in src
+            and src.index("_scan_updates_inline") < src.index("_recompute_decision")),            "update check must precede tier decision"
+
+
+@test("Urgent Consistency", "بند عاجل بحالة (تحديث متاح) يقابله صف فعلي بقائمة التحديثات",
+      "لا يظهر بند عاجل يدّعي توفّر تحديث بلا ما يقابله",
+      "_has_available_update يقرأ نفس _upg_state المعروض بالواجهة", "Consistency / UX Integrity")
+def urgent_claiming_update_has_a_matching_row():
+    with srv._upg_lock:
+        saved = dict(srv._upg_state)
+        srv._upg_state["phase"] = "scanned"
+        srv._upg_state["items"] = [{"Id": "Telegram.TelegramDesktop",
+                                    "Name": "Telegram Desktop", "Available": "7.0.5"}]
+    try:
+        hit  = srv._has_available_update("Telegram Desktop 7.0.2")
+        miss = srv._has_available_update("Some Unrelated Program 1.0")
+    finally:
+        with srv._upg_lock:
+            srv._upg_state.clear(); srv._upg_state.update(saved)
+    return (hit is True and miss is False), f"hit={hit!r} miss={miss!r}"
+
+
+@test("Urgent Consistency", "قبل أي فحص تحديثات تبقى الحالة (غير معروف) لا (لا يوجد تحديث)",
+      "_has_available_update ترجع None وليس False",
+      "tri-state fail-safe: unknown != no-update", "Fail-Safe / Data Integrity")
+def urgent_unknown_state_is_not_no_update():
+    with srv._upg_lock:
+        saved = dict(srv._upg_state)
+        srv._upg_state["phase"] = None
+        srv._upg_state["items"] = []
+    try:
+        val = srv._has_available_update("Anything 1.0")
+    finally:
+        with srv._upg_lock:
+            srv._upg_state.clear(); srv._upg_state.update(saved)
+    return val is None, f"got {val!r}, expected None"
+
+
+
+@test("DoS", "الجسم المرفوض لا يُعامَل كطلب فارغ صالح",
+      "413 لا 200 — ولا يُخلط مع غياب الجسم",
+      "BODY_TOO_LARGE منفصل عن None في _json_body", "A05 / Fail-Safe")
+def dos_oversized_body_is_not_silently_empty():
+    # The bug: _read_body() returned None for BOTH "no body" and "body too
+    # large", and every caller collapsed None to {}. An oversized settings
+    # save answered 200 OK and saved nothing, telling the user it succeeded.
+    h = _handler({"Content-Length": str(srv.MAX_BODY_BYTES + 1)})
+    refused = h._read_body()
+    empty = _handler({"Content-Length": "0"})._read_body()
+    return (refused is srv.Handler.BODY_TOO_LARGE
+            and empty == b""
+            and refused is not empty), f"refused={refused!r} empty={empty!r}"
 
 
 if __name__ == "__main__":

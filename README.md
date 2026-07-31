@@ -51,13 +51,46 @@ Create your `inventory.txt` first (copy `inventory.example.txt`).
 
 ## What each agent does
 
+Eight agents, each with one job. Four run inside the scan subprocess and
+announce themselves in the live log; the other four run in the server process.
+
 | Agent | Role | Access |
 |---|---|---|
 | Orchestrator | Coordinates the run, sequences the others | — |
+| Asset Auditor | Inventories installed software via winget | read-only, sandboxed |
+| Package Manager | Checks update catalogs; applies winget updates | fixed `winget` argv only |
 | Threat Hunter | Queries NVD for CVEs matching your assets | network only (NVD host) |
-| Asset Auditor | Reads `inventory.txt` | read-only, sandboxed |
+| KEV Checker | Flags CVEs on CISA's Known Exploited list | network only (CISA host) |
+| Decision | Tiers findings urgent/routine/info, scores health | — |
 | Remediation | Writes `threat_intel_report.md` | write-only, fixed path |
-| Package Manager | Scans/applies winget updates | fixed `winget` argv only |
+| Analyst | Optional local LLM (Ollama) explanations and Q&A | localhost only |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the data flow, the update-source
+layer, and the trust boundaries.
+
+## Notable behaviour
+
+- **Update coverage beyond `winget upgrade`.** `winget upgrade` only considers
+  packages carrying a catalog Source — on a real machine that was 67 of 183
+  installed programs. Securo additionally looks up untracked programs by exact
+  name and compares versions, recovering updates that would otherwise stay
+  invisible. Everything still unreachable is classified and explained (Store
+  apps Windows updates itself, drivers in no catalog, entries with no
+  comparable version) rather than reported as one opaque number.
+
+- **Deep scan.** Ignores the 24-hour NVD result cache and re-queries every
+  installed program from scratch. Ordinary scans reuse cached results, so a
+  re-scan is fast; deep scan is the "check everything again" button.
+
+- **Urgent means actionable.** A finding reaches the urgent tier only if a fix
+  actually exists and exploitation is realistic. Update availability is
+  tri-state — `unknown` is never rendered as "no update exists".
+
+- **Live 3D agent scene.** Shows all eight agents driven by real execution
+  state, not a simulation. It is still while idle and animates only while work
+  is happening.
+
+- **Print / save as PDF** for the scan report.
 
 ## Security
 
@@ -76,7 +109,7 @@ person ([N1W1F](https://github.com/N1W1F)):
 - **Approver**: approves what gets tagged as a release / signed build.
 
 `main` is branch-protected — no change reaches it without the automated
-126-test Golden Dataset security suite passing first (see
+142-test Golden Dataset security suite passing first (see
 [.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ## Code signing policy

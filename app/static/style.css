@@ -85,7 +85,12 @@ body::before{
   animation:meshDrift 24s ease-in-out infinite alternate;
 }
 @keyframes meshDrift{to{transform:translate3d(-2%,2%,0) scale(1.05);}}
-#scene3dBg{position:fixed;inset:0;z-index:-2;width:100%;height:100%;pointer-events:none;}
+/* A canvas is a replaced element: with width:auto it sizes to its intrinsic
+   drawing-buffer (2400px here), so explicit width/height are required — but
+   they override the inset shorthand's right/bottom, and under dir=rtl the box
+   was then laid out from the RIGHT edge, hanging past the left and giving the
+   page a phantom horizontal scrollbar. Anchor physically instead of via inset. */
+#scene3dBg{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-2;pointer-events:none;}
 /* (grid overlay removed — clean space look, stars only) */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation:none !important;transition-duration:.01ms !important;}
@@ -96,6 +101,11 @@ body::before{
 @media (max-width:1100px){.app-shell{grid-template-columns:76px 1fr;}}
 
 .sidebar{
+  /* A grid item's automatic minimum size is its min-content, not zero. Without
+     this the sidebar's min-content widened the whole `1fr` track past the
+     viewport on narrow windows, giving the page a horizontal scrollbar.
+     .main-col and .activity-rail already carry the same guard. */
+  min-width:0;
   display:flex;flex-direction:column;align-items:center;
   background:var(--glass);border-inline-end:1px solid var(--border);
   backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
@@ -599,6 +609,79 @@ body::before{
   .sidebar-foot{border-top:none;padding-top:0;flex:0 0 auto;width:auto;}
   .lang-switch{flex-direction:row;width:auto;}
   .main-col{padding:16px;}
+}
+
+/* ---------- confirm dialog ----------
+   Replaces window.confirm(). Two of its call sites gate winget INSTALLS, and
+   confirm() inside an embedded webview host is not guaranteed to render — a
+   suppressed dialog returns false (updates silently never apply) or, worse,
+   true (software installs without the user agreeing). An in-page dialog is
+   deterministic and themed. */
+.modal-backdrop{
+  position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;
+  background:rgba(2,1,6,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  animation:fadeIn .18s ease both;padding:24px;
+}
+@keyframes fadeIn{from{opacity:0;}}
+.modal{
+  max-width:460px;width:100%;padding:22px 24px;
+  background:var(--glass-strong);border:1px solid var(--border-strong);border-radius:var(--radius-xl);
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+  box-shadow:var(--inner-hi),0 24px 70px -20px rgba(0,0,0,.8);
+  animation:riseIn .25s var(--ease-out-soft) both;
+}
+.modal p{margin:0 0 18px;font-size:13.5px;line-height:1.85;color:var(--text);white-space:pre-line;}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;}
+.modal-actions .btn-outline,.modal-actions .btn-primary{padding:9px 20px;font-size:13px;}
+
+.btn-sm{padding:6px 12px !important;font-size:11.5px !important;}
+.inline-msg{font-size:11.5px;color:var(--amber);align-self:center;}
+.empty-hint.is-busy{color:var(--cyan);}
+/* the panel is waiting on a real background job, so say so visibly */
+.empty-hint.is-busy::after{content:"";display:inline-block;width:9px;height:9px;margin-inline-start:8px;border-radius:50%;background:var(--cyan);vertical-align:middle;animation:pulse 1.1s ease-in-out infinite;}
+.upd-buckets{margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;line-height:1.85;color:var(--muted);}
+.upd-buckets b{color:var(--text);font-family:var(--font-mono);}
+/* marks an update the standard winget upgrade check never reported — found
+   by matching the installed product name against the catalog instead */
+.upd-recovered{
+  margin-inline-start:8px;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:600;
+  color:var(--cyan);border:1px solid rgba(34,211,238,.4);background:rgba(34,211,238,.08);
+  white-space:nowrap;vertical-align:middle;cursor:help;
+}
+
+/* ---------- print / save-as-PDF ----------
+   Only the report survives printing. Everything else — the 3D canvas, the
+   nav rail, the live log, every control — is either meaningless on paper or
+   burns a full page of ink, so it is removed rather than hidden with
+   visibility (display:none keeps it out of the page flow entirely).
+   Colours are inverted to ink-on-white: the dark theme would otherwise print
+   as a solid black rectangle. */
+@media print{
+  @page{margin:14mm;}
+  html,body{background:#fff !important;color:#111 !important;}
+  body::before,#scene3dBg,.sidebar,.activity-rail,.topbar,.run-status,.kpi-row,
+  .kpi-detail,.urgent-banner,.pipeline3d,.section-toggle-row,.tabpanel,
+  .view-switch,#printBtn,.modal-backdrop,.report-note{display:none !important;}
+  .app-shell{display:block !important;}
+  .main-col{padding:0 !important;}
+  .panel,.report-panel{
+    background:#fff !important;border:none !important;box-shadow:none !important;
+    max-height:none !important;min-height:0 !important;overflow:visible !important;
+    backdrop-filter:none !important;
+  }
+  .panel-head{border:none !important;padding:0 0 8px !important;}
+  .panel-head h2{color:#111 !important;font-size:17px !important;}
+  #reportMeta{color:#555 !important;background:none !important;border:none !important;}
+  /* the box scrolls on screen; on paper it must expand to its full height or
+     everything past the first viewport-worth is silently dropped */
+  .report-box{overflow:visible !important;max-height:none !important;height:auto !important;
+    color:#111 !important;padding:0 !important;}
+  .report-box h2{color:#000 !important;border-bottom:1px solid #bbb !important;
+    break-after:avoid;page-break-after:avoid;}
+  .report-box li{break-inside:avoid;page-break-inside:avoid;color:#111 !important;}
+  .report-box a{color:#111 !important;text-decoration:underline;}
+  .sev-badge,.badge-muted{border:1px solid #999 !important;color:#111 !important;background:none !important;}
+  .explain-btn,.explain-box{display:none !important;}
 }
 
 /* scrollbars */

@@ -15,16 +15,23 @@ import re
 import subprocess
 import sys
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from audit import log
 from agents import winget_table
+from agents import sources as update_sources
+from agents.sources import winget_catalog
 
 AGENT = "Package Manager"
 
 WINGET = "winget"
 SCAN_TIMEOUT_SECS = 90
+SEARCH_TIMEOUT_SECS = 25   # one catalog lookup; measured ~0.2s
+# Independent subprocesses, so concurrency is free. Capped low so a
+# 100-package machine never spawns a process storm.
+SEARCH_WORKERS = 6
 DETAILS_TIMEOUT_SECS = 40
 UPDATE_TIMEOUT_SECS = 900
 PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.\-]{0,120}$")
@@ -68,7 +75,40 @@ def _parse_table(raw: str) -> list[dict]:
 # then thrown away, so the update simply never appeared in the UI.
 UPGRADABLE_SOURCES = {"winget", "msstore"}
 
-_last_coverage = {"total": 0, "tracked": 0, "untracked": 0}
+_last_coverage = {"total": 0, "tracked": 0, "untracked": 0, "recovered": 0}
+
+# Version strings we refuse to reason about. "Unknown" is winget's own
+# placeholder; the rest are ARP junk that never compares meaningfully.
+_UNUSABLE_VERSIONS = {"", "unknown", "none", "n/a"}
+_VERSION_PART_RE = re.compile(r"\d+")
+
+
+def _version_tuple(v: str) -> tuple | None:
+    """Numeric tuple for comparison, or None if the string isn't a version.
+
+    Deliberately conservative: anything that isn't a plain dotted number
+    ('1.2.3', '150.1.92.144') returns None, and a None on EITHER side means
+    we report nothing. Claiming a phantom update is worse than missing one —
+    it sends the user to reinstall software that is already current.
+    """
+    v = (v or "").strip()
+    if v.lower() in _UNUSABLE_VERSIONS:
+        return None
+    core = v.split("-")[0].split("+")[0]          # drop 1.2.3-beta / 1.2.3+build
+    parts = core.split(".")
+    if not all(p.isdigit() for p in parts if p != ""):
+        return None
+    nums = [int(p) for p in parts if p != ""]
+    return tuple(nums) or None
+
+
+def _is_newer(candidate: str, installed: str) -> bool:
+    a, b = _version_tuple(candidate), _version_tuple(installed)
+    if a is None or b is None:
+        return False
+    # pad so 1.2 vs 1.2.0 compares equal instead of "older"
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
 
 
 def coverage() -> dict:
@@ -108,10 +148,132 @@ def scan_upgradable() -> list[dict]:
         and r.get("Available") not in ("", "Unknown")
         and PACKAGE_ID_RE.match(r.get("Id", ""))
     ]
+
+    # Everything winget's own upgrade check cannot see — recover what we can.
+    untracked = [r for r in rows if r.get("Source") not in UPGRADABLE_SOURCES]
+    installed_ids = {(r.get("Id") or "").strip().casefold() for r in rows}
+    recovered, bucket_counts = _classify_and_recover(untracked, installed_ids)
+    upgradable.extend(recovered)
+    _last_coverage["recovered"] = len(recovered)
+    _last_buckets.clear()
+    _last_buckets.update(bucket_counts)
+
     _last_scanned_ids = {r["Id"] for r in upgradable}
     log(AGENT, f"found {len(upgradable)} package(s) with an available update "
-               f"({len(tracked)} of {len(rows)} installed packages are update-trackable)")
+               f"({len(tracked)} of {len(rows)} installed packages are update-trackable"
+               + (f"; {len(recovered)} more recovered by name match" if recovered else "")
+               + ")")
     return upgradable
+
+
+def _search_exact(name: str) -> list[dict]:
+    """Back-compat shim over the winget catalog source.
+
+    Kept because the Golden Dataset injects here to exercise the recovery
+    logic without spawning real winget processes.
+    """
+    m = winget_catalog.lookup(name)
+    if m is None:
+        return []
+    if m.ambiguous:
+        return [{}, {}]      # length > 1 signals ambiguity to the caller
+    return [{"Id": m.package_id, "Version": m.version or "", "Source": m.source}]
+
+
+# How an untracked program ended up unchecked. Each bucket carries a
+# different message and a different action for the user, which is the whole
+# point of classifying instead of reporting one opaque "116 untracked".
+BUCKET_RECOVERED  = "recovered"      # a real catalog update was found
+BUCKET_STORE      = "store"          # Microsoft Store app — Windows updates it
+BUCKET_NO_SOURCE  = "no_source"      # in no catalog at all (drivers, OEM bundles)
+BUCKET_NO_VERSION = "no_version"     # installed version unusable for comparison
+BUCKET_DUPLICATE  = "duplicate"      # same program already tracked under its own row
+BUCKET_AMBIGUOUS  = "ambiguous"      # several catalog packages share the name
+
+_last_buckets: dict[str, int] = {}
+
+
+def buckets() -> dict:
+    """Why each untracked program could not be update-checked."""
+    return dict(_last_buckets)
+
+
+def _classify_and_recover(untracked: list[dict],
+                          installed_ids: set[str]) -> tuple[list[dict], dict]:
+    """Consult every update source for each untracked program.
+
+    Returns (recovered_upgrade_rows, bucket_counts). A program is only ever
+    reported as upgradable when a version-capable source resolves it AND the
+    version comparison is unambiguous; everything else is classified so the
+    UI can explain it instead of leaving it an unexplained gap.
+
+    Lookups are independent subprocesses, so they run on a small pool.
+    """
+    counts = {BUCKET_RECOVERED: 0, BUCKET_STORE: 0, BUCKET_NO_SOURCE: 0,
+              BUCKET_NO_VERSION: 0, BUCKET_DUPLICATE: 0, BUCKET_AMBIGUOUS: 0}
+    if not untracked:
+        return [], counts
+
+    sources = update_sources.available_sources()
+
+    def probe(row):
+        name = (row.get("Name") or "").strip()
+        installed = (row.get("Version") or "").strip()
+        if not name or _version_tuple(installed) is None:
+            # Nothing to compare against, so no source can help. Still worth
+            # asking the Store, because "this is a Store app" explains it.
+            for src in sources:
+                if not src.CAN_COMPARE and src.lookup(name):
+                    return BUCKET_STORE, None
+            return BUCKET_NO_VERSION, None
+
+        for src in sources:
+            m = src.lookup(name)
+            if m is None:
+                continue
+            if m.ambiguous:
+                return BUCKET_AMBIGUOUS, None
+            if not src.CAN_COMPARE or m.version is None:
+                # Identified but unversionable — the Store case.
+                return BUCKET_STORE, None
+            if not PACKAGE_ID_RE.match(m.package_id):
+                return BUCKET_NO_SOURCE, None
+            # If that catalog package is ALREADY installed under its own row,
+            # this untracked row is a different component that merely shares a
+            # name — e.g. "WinRAR" the MSIX shell extension (1.0.0.2) next to
+            # "WinRAR 7.23 (64-bit)" (RARLab.WinRAR, current). Comparing the
+            # extension's version against the app's package invented an
+            # upgrade for software already up to date.
+            if m.package_id.casefold() in installed_ids:
+                return BUCKET_DUPLICATE, None
+            if not _is_newer(m.version, installed):
+                return BUCKET_DUPLICATE, None     # known to the catalog, already current
+            return BUCKET_RECOVERED, {
+                "Name": name, "Id": m.package_id, "Version": installed,
+                "Available": m.version, "Source": m.source, "Recovered": True,
+            }
+        return BUCKET_NO_SOURCE, None
+
+    try:
+        with ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
+            results = list(pool.map(probe, untracked))
+    except Exception as exc:                 # thread pool refused to start
+        log(AGENT, f"update-source pass skipped: {type(exc).__name__}")
+        return [], counts
+
+    recovered = []
+    for bucket, row in results:
+        counts[bucket] = counts.get(bucket, 0) + 1
+        if row:
+            recovered.append(row)
+    return recovered, counts
+
+
+def _recover_untracked_upgrades(untracked: list[dict],
+                                installed_ids: set[str]) -> list[dict]:
+    """Update rows only. Kept as the narrow entry point the tests target."""
+    recovered, _ = _classify_and_recover(untracked, installed_ids)
+    return recovered
 
 
 def get_details(package_id: str) -> dict:

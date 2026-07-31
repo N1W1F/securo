@@ -11,9 +11,14 @@
 // (already fully functional on their own) are the fallback — nothing here
 // is load-bearing for the app to work.
 
+// Imports the SAME ESM build pipeline3d.js uses. This file used to be a
+// classic script against the legacy UMD three.min.js, which meant the app
+// shipped TWO complete copies of Three.js (654 KB UMD + 1295 KB ESM) and
+// parsed both on every launch. One module, one copy, one parse.
+import * as THREE from '/vendor/three/three.module.js';
+
 (function () {
   "use strict";
-  if (typeof THREE === "undefined") return; // vendor file missing/blocked — silent fallback
 
   const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let tabHidden = document.hidden;

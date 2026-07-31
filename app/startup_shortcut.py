@@ -38,6 +38,19 @@ def is_enabled() -> bool:
     return bool(d and (d / SHORTCUT_NAME).is_file())
 
 
+def _ps_quote(value: str) -> str:
+    """Embed a path in a PowerShell single-quoted string safely.
+
+    Inside '...' PowerShell treats everything literally EXCEPT a single quote,
+    which ends the string. Windows usernames may legitimately contain one
+    (a home directory like "C:/Users/O'Brien"), so an un-escaped path both
+    broke the command and
+    let the remainder of the path be parsed as code. PowerShell escapes a
+    quote by doubling it.
+    """
+    return str(value).replace("'", "''")
+
+
 def enable() -> bool:
     d = _startup_dir()
     if not d:
@@ -50,7 +63,7 @@ def enable() -> bool:
             "$s.WorkingDirectory = '{cwd}'; "
             "$s.IconLocation = '{exe}'; "
             "$s.Save()"
-        ).format(link=str(target), exe=str(EXE_PATH), cwd=str(BASE_DIR))
+        ).format(link=_ps_quote(target), exe=_ps_quote(EXE_PATH), cwd=_ps_quote(BASE_DIR))
     elif LAUNCH_VBS.is_file():
         ps = (
             "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{link}'); "
@@ -59,7 +72,7 @@ def enable() -> bool:
             "$s.WorkingDirectory = '{cwd}'; "
             "$s.WindowStyle = 7; "
             "$s.Save()"
-        ).format(link=str(target), vbs=str(LAUNCH_VBS), cwd=str(APP_DIR))
+        ).format(link=_ps_quote(target), vbs=_ps_quote(LAUNCH_VBS), cwd=_ps_quote(APP_DIR))
     else:
         return False
     try:

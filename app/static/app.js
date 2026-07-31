@@ -412,6 +412,45 @@ function beginScanPolling() {
   poll();
 }
 
+// --- confirm dialog ------------------------------------------------------
+// Drop-in async replacement for window.confirm(). Resolves true/false.
+// Escape and backdrop click both cancel, matching confirm()'s semantics
+// (anything other than an explicit yes means no) — important because two
+// callers install software.
+const confirmModal = document.getElementById("confirmModal");
+const confirmText = document.getElementById("confirmText");
+const confirmOk = document.getElementById("confirmOk");
+const confirmCancel = document.getElementById("confirmCancel");
+let confirmResolve = null;
+
+function closeConfirm(answer) {
+  if (!confirmResolve) return;
+  const done = confirmResolve;
+  confirmResolve = null;
+  confirmModal.hidden = true;
+  document.removeEventListener("keydown", confirmKeydown, true);
+  done(answer);
+}
+function confirmKeydown(e) {
+  if (e.key === "Escape") { e.preventDefault(); closeConfirm(false); }
+  else if (e.key === "Enter") { e.preventDefault(); closeConfirm(true); }
+}
+function askConfirm(message) {
+  // A second call while one is open would strand the first promise forever;
+  // resolve it as cancelled rather than leaking a pending await.
+  if (confirmResolve) closeConfirm(false);
+  confirmText.textContent = message;
+  confirmModal.hidden = false;
+  document.addEventListener("keydown", confirmKeydown, true);
+  confirmOk.focus();
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+confirmOk.addEventListener("click", () => closeConfirm(true));
+confirmCancel.addEventListener("click", () => closeConfirm(false));
+confirmModal.addEventListener("click", (e) => {
+  if (e.target === confirmModal) closeConfirm(false);
+});
+
 function setDeepBusy(busy, spinning) {
   if (!deepRunBtn) return;
   deepRunBtn.disabled = busy;
@@ -459,8 +498,8 @@ async function startScan({ deep }) {
 
 runBtn.addEventListener("click", () => startScan({ deep: false }));
 if (deepRunBtn) {
-  deepRunBtn.addEventListener("click", () => {
-    if (!confirm(t("deepScanConfirm"))) return;
+  deepRunBtn.addEventListener("click", async () => {
+    if (!(await askConfirm(t("deepScanConfirm")))) return;
     startScan({ deep: true });
   });
 }
@@ -468,6 +507,39 @@ if (deepRunBtn) {
 document.querySelectorAll(".view-opt").forEach((b) =>
   b.addEventListener("click", () => { if (b.dataset.view) setView(b.dataset.view); })
 );
+
+// --- print / save as PDF -------------------------------------------------
+// Small transient message anchored next to a button, for spots with no
+// dedicated status element of their own.
+function setInlineMsg(anchor, msg) {
+  let el = anchor.parentElement.querySelector(".inline-msg");
+  if (!el) {
+    el = document.createElement("span");
+    el.className = "inline-msg";
+    anchor.parentElement.insertBefore(el, anchor.nextSibling);
+  }
+  el.textContent = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.remove(), 4000);
+}
+
+const printBtn = document.getElementById("printBtn");
+if (printBtn) {
+  printBtn.addEventListener("click", () => {
+    if (!lastReportMarkdown) {
+      // printing with no report yields a blank page, which reads as a bug
+      setInlineMsg(printBtn, t("printEmpty"));
+      return;
+    }
+    // The print stylesheet keeps only the report panel. If the user collapsed
+    // that section it is display:none — and display:none survives into print,
+    // producing an empty document. Re-open it before handing off.
+    const collapsed = document.querySelector(
+      '.section-toggle[data-target="scanGrid"][aria-expanded="false"]');
+    if (collapsed) collapsed.click();
+    window.print();
+  });
+}
 
 // --- updates / winget panel ----------------------------------------------
 const scanBtn = document.getElementById("scanBtn");
@@ -543,16 +615,39 @@ function renderUpgProgress(p) {
 function coverageNote() {
   const c = (lastUpg && lastUpg.coverage) || null;
   if (!c || !c.total || !c.untracked) return "";
-  return `<p class="upd-coverage">${escapeHtml(t("updCoverage", c.tracked, c.total, c.untracked))}</p>`;
+  const b = (lastUpg && lastUpg.buckets) || {};
+  // Each bucket has a different cause AND a different action. Reporting one
+  // opaque "116 untracked" told the user nothing they could act on.
+  const rows = [
+    ["store",      b.store],
+    ["no_source",  b.no_source],
+    ["no_version", b.no_version],
+    ["duplicate",  b.duplicate],
+    ["ambiguous",  b.ambiguous],
+  ].filter(([, n]) => n > 0);
+  const detail = rows.length
+    ? `<ul class="upd-buckets">${rows
+        .map(([k, n]) => `<li><b>${n}</b> ${escapeHtml(t("bucket_" + k))}</li>`)
+        .join("")}</ul>`
+    : "";
+  return `<p class="upd-coverage">${escapeHtml(
+    t("updCoverage", c.tracked, c.total, c.untracked, c.recovered || 0))}</p>${detail}`;
 }
 
 function renderUpdateRows() {
   const { items, results } = lastUpg;
   const resultById = Object.fromEntries((results || []).map((r) => [r.id, r]));
   if (!items.length) {
-    updatesBox.innerHTML = `<p class="empty-hint">${escapeHtml(
-      lastUpg.scanned ? t("updatesNone") : t("updatesEmpty")
-    )}</p>${lastUpg.scanned ? coverageNote() : ""}`;
+    // Three states, not two. This used to be scanned/not-scanned only, so
+    // while a scan was actually running the panel told the user to press the
+    // button to start one — directly above a log line saying it had started.
+    // The auto-scan at startup made that the FIRST thing the user sees.
+    const msg = lastUpg.running ? t("updatesScanning")
+              : lastUpg.scanned ? t("updatesNone")
+              : t("updatesEmpty");
+    updatesBox.innerHTML =
+      `<p class="empty-hint${lastUpg.running ? " is-busy" : ""}">${escapeHtml(msg)}</p>` +
+      (lastUpg.scanned && !lastUpg.running ? coverageNote() : "");
     applyAllBtn.hidden = true;
     return;
   }
@@ -573,7 +668,10 @@ function renderUpdateRows() {
       const meta = metaText(detailsCache[it.Id] || undefined);
       return `<div class="upd-row" data-id="${escapeHtml(it.Id)}">
         <div class="upd-main">
-          <span class="upd-name">${escapeHtml(it.Name || it.Id)}</span>
+          <span class="upd-name">${escapeHtml(it.Name || it.Id)}</span>${
+            it.Recovered
+              ? `<span class="upd-recovered" title="${escapeHtml(t("updRecoveredHint"))}">${escapeHtml(t("updRecoveredTag"))}</span>`
+              : ""}
           <span class="upd-meta" data-id="${escapeHtml(it.Id)}">${escapeHtml(meta)}</span>
         </div>
         <span class="upd-ver" dir="ltr">${escapeHtml(it.Version || "")} → ${escapeHtml(it.Available || "")}</span>
@@ -587,9 +685,9 @@ function renderUpdateRows() {
   applyAllBtn.hidden = false;
 
   updatesBox.querySelectorAll(".upd-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const id = btn.dataset.id;
-      if (!confirm(t("confirmOne", id))) return;
+      if (!(await askConfirm(t("confirmOne", id)))) return;
       startApply([id]);
     });
   });
@@ -644,6 +742,12 @@ async function fetchUpgradeStatus() {
   scanBtn.disabled = state.running;
   applyAllBtn.disabled = state.running || state.items.length === 0;
 
+  if (state.running && !upgPollTimer) {
+    // A scan we did not start (startup priming, or the one that runs after a
+    // security scan) is in progress — follow it, otherwise the panel freezes
+    // on whatever it showed before and never picks up the results.
+    upgPollTimer = setInterval(fetchUpgradeStatus, 900);
+  }
   if (!state.running && upgPollTimer) {
     clearInterval(upgPollTimer);
     upgPollTimer = null;
@@ -700,12 +804,12 @@ async function goToUpdateForProduct(productName) {
   tryHighlight(60); // covers a full winget scan (~tens of seconds)
 }
 
-applyAllBtn.addEventListener("click", () => {
+applyAllBtn.addEventListener("click", async () => {
   const ids = Array.from(updatesBox.querySelectorAll(".upd-row"))
     .map((row) => row.dataset.id)
     .filter(Boolean);
   if (!ids.length) return;
-  if (!confirm(t("confirmAll", ids.length))) return;
+  if (!(await askConfirm(t("confirmAll", ids.length)))) return;
   startApply(ids);
 });
 
@@ -1500,7 +1604,7 @@ saveCfgBtn.addEventListener("click", async () => {
 });
 
 runNowBtn.addEventListener("click", async () => {
-  if (!confirm(t("confirmRunNow"))) return;
+  if (!(await askConfirm(t("confirmRunNow")))) return;
   runNowBtn.disabled = true;
   try {
     const res = await postJSON("/api/schedule/run-now");
