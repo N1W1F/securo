@@ -12,7 +12,8 @@ telemetry, and nothing leaves the device — the UI is a local window bound to
 
 Bilingual UI (العربية / English) with full RTL/LTR support.
 
-![Securo dashboard](docs/screenshots/dashboard-ar.png)
+![Securo dashboard](<img width="1920" height="1032" alt="image" src="https://github.com/user-attachments/assets/d7019651-75f0-461c-94a7-7a7feff6ebbe" />
+)
 
 **The core idea:** a finding is only promoted to *urgent* if a fix actually
 exists **and** exploitation is realistic. On the machine in these screenshots
