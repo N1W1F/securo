@@ -15,7 +15,7 @@ OUT_DIR = BASE / "share"
 VERSION = "1.0"
 ZIP_PATH = OUT_DIR / f"Securo-v{VERSION}-source.zip"
 
-INCLUDE_TOP = ["README.md", "SHARING.md", "SUBMISSION.md", "requirements.txt",
+INCLUDE_TOP = ["README.md", "SHARING.md", "ARCHITECTURE.md", "requirements.txt",
                "inventory.example.txt", "SECURITY_GOLDEN_DATASET.md", "SECURITY_GOLDEN_DATASET.json"]
 INCLUDE_APP = "app"
 
