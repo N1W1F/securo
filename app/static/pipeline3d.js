@@ -484,6 +484,18 @@ function updateLabels(){
 
     const on = p.i === state.active || apiActive[p.i], dn = p.i < state.doneUpTo;
     el.classList.toggle('on', on); el.classList.toggle('done', dn && !on);
+
+    // Name is refreshed here, from the loop that already runs every frame.
+    // It used to be written once at creation and then only by a
+    // window.onLangChange wrapper — which a later rewrite of this function
+    // silently deleted, because the wrapper happened to sit inside the block
+    // that was replaced. The result: switching to English translated every
+    // label's STATUS ("Ready") while the agent NAMES stayed Arabic. Deriving
+    // it here cannot fall out of sync with the language again.
+    const nm = el.querySelector('.nm');
+    const wantName = agentName(p.i);
+    if (nm.textContent !== wantName) nm.textContent = wantName;
+
     el.querySelector('.st').textContent =
       on ? tr('agentRunning') : (dn ? tr('stageDone') : tr('stageReady'));
   }
@@ -493,6 +505,18 @@ function updateLabels(){
 const m0=$('m0'), m1=$('m1'), m2=$('m2'), m3=$('m3'), f0=$('f0');
 const card=$('card'), cardName=$('cardName'), cardDesc=$('cardDesc'),
       cardState=$('cardState'), cardX=$('cardX');
+
+// The projected labels follow the language from the render loop above, but the
+// agent card is only written when an agent is picked — so it needs an explicit
+// refresh. Chain onto any existing handler; app.js owns one.
+const _prevLangChange = window.onLangChange;
+window.onLangChange = function () {
+  if (typeof _prevLangChange === "function") _prevLangChange.apply(this, arguments);
+  if (card && !card.hidden && state.selected >= 0) {
+    cardName.textContent = agentName(state.selected);
+    cardDesc.textContent = agentDesc(state.selected);
+  }
+};
 
 /* ---------- picking: click an agent to focus ---------- */
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
