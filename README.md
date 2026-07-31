@@ -1,11 +1,23 @@
 # Securo
 
-A local, multi-agent security dashboard. It reads a list of your installed
-software, checks each item against the public **NVD** CVE database, writes a
-report, and (via **winget**) can show and apply available updates. Everything
-runs on your own machine — the UI is a local window bound to `127.0.0.1`.
+A local, multi-agent security dashboard for Windows. It inventories the
+software installed on your machine, matches each item against the public
+**NVD** CVE database and **CISA KEV**, and tells you what actually warrants a
+decision today — instead of handing you a wall of alerts. Via **winget** it
+also surfaces and applies available updates.
+
+Everything runs on your own machine. No account, no subscription, no
+telemetry, and nothing leaves the device — the UI is a local window bound to
+`127.0.0.1`.
 
 Bilingual UI (العربية / English) with full RTL/LTR support.
+
+![Securo dashboard](docs/screenshots/dashboard-ar.png)
+
+**The core idea:** a finding is only promoted to *urgent* if a fix actually
+exists **and** exploitation is realistic. On the machine in these screenshots
+that turned 266 raw CVE matches into a handful of items worth acting on. What
+is filtered out is explained, not hidden.
 
 **What this is not:** Securo only cross-references locally-installed software
 names/versions against public vulnerability databases (NVD, CISA KEV) — the
@@ -32,6 +44,19 @@ installing or operating it. No telemetry, no analytics, no data collection.
 3. شغّل: `python app/desktop_app.py`  — أو انقر اختصار سطح المكتب.
 
 ---
+
+## Screenshots
+
+| | |
+|---|---|
+| **Live agent scene** — all eight agents, driven by real execution state | **Agent detail** — click any agent; the camera flies to it |
+| ![](docs/screenshots/agent-scene.png) | ![](docs/screenshots/agent-detail.png) |
+| **Security test suite** — 142 tests across 35 attack categories, runnable in-app | **Updates** — including ones `winget upgrade` cannot see |
+| ![](docs/screenshots/security-tests.png) | ![](docs/screenshots/updates-coverage.png) |
+
+Full English (LTR) layout:
+
+![English UI](docs/screenshots/dashboard-en.png)
 
 ## Requirements
 
